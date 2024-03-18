@@ -1,24 +1,54 @@
 const std = @import("std");
+const expect = @import("std").testing.expect;
 
-pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+const Header = union(enum) {
+    Ping: packed struct { num: u32 },
+    PingReply: packed struct { num: u32 },
+};
 
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
+const Message = struct {
+    header: Header,
+    body: ?[]u8,
+};
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+fn writeHeader(header: *const Header, strm: anytype) !void {
+    const fields = @typeInfo(Header).Union.fields;
+    const options = @typeInfo(@typeInfo(Header).Union.tag_type orelse unreachable).Enum.fields;
+    const idx = @intFromEnum(header.*);
 
-    try bw.flush(); // don't forget to flush!
+    inline for (fields) |f| {
+        inline for (options) |o| {
+            if (std.mem.eql(u8, o.name, f.name)) {
+                if (o.value == idx) {
+                    return try strm.writeAll(std.mem.asBytes(&@field(header.*, f.name)));
+                }
+            }
+        }
+    }
+
+    unreachable;
 }
 
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
+fn writeMessage(mes: Message, strm: anytype) !void {
+    const idx = @intFromEnum(mes.header);
+    try strm.writeAll(std.mem.asBytes(&idx));
+    try writeHeader(&mes.header, strm);
+    if (mes.body) |body| {
+        try strm.writeAll(body);
+    }
+}
+
+pub fn main() !void {
+    var buffer = [_]u8{0} ** 32;
+    var bufferStream = std.io.fixedBufferStream(buffer[0..]);
+    var strm = bufferStream.writer();
+    const mes = Message{
+        .header = Header{ .Ping = .{ .num = 4 } },
+        .body = undefined,
+    };
+    try writeMessage(mes, strm);
+    // for (buffer) |e| {
+    //     std.debug.print("-> {d}\n", .{e});
+    // }
+    std.debug.print("S = {d}", .{@sizeOf(?u64)});
 }
