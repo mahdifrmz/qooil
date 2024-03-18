@@ -1,11 +1,12 @@
 const builtin = @import("builtin");
 const std = @import("std");
+const net = std.net;
 const expect = std.testing.expect;
 
 const TagType = u16;
 
 const Header = union(enum(TagType)) {
-    None: packed struct {},
+    None: void,
     Ping: packed struct { num: u32 },
     PingReply: packed struct { num: u32 },
 };
@@ -40,8 +41,9 @@ fn readHeader(idx: TagType, strm: anytype) !Header {
         inline for (options) |o| {
             if (std.mem.eql(u8, o.name, f.name)) {
                 if (o.value == idx) {
-                    var header: Header = .{ .None = {} };
-                    return try strm.readAll(std.mem.asBytes(&@field(header.*, f.name)));
+                    var opt: f.type = undefined;
+                    _ = try strm.readAll(std.mem.asBytes(&opt));
+                    return @unionInit(Header, f.name, opt);
                 }
             }
         }
@@ -49,8 +51,6 @@ fn readHeader(idx: TagType, strm: anytype) !Header {
 
     unreachable;
 }
-
-const SYSTEM_ENDIANNESS = builtin.target.cpu.arch.endian();
 
 fn writeMessage(mes: Message, strm: anytype) !void {
     const idx = std.mem.nativeToLittle(TagType, @intFromEnum(mes.header));
@@ -106,32 +106,38 @@ const ArgParser = struct {
     fault: ?[]const u8,
 
     fn init(iterator: std.process.ArgIterator) Self {
+        var iter_mut = iterator;
+        _ = iter_mut.next();
         return .{
-            .iterator = iterator,
+            .iterator = iter_mut,
             .arguments = .{
-                .port = undefined,
-                .mode = undefined,
-                .address = undefined,
+                .port = null,
+                .mode = null,
+                .address = null,
                 .help = false,
             },
-            .fault = undefined,
-            .current = undefined,
+            .fault = null,
+            .current = null,
         };
+    }
+
+    fn read(self: *Self) ?[:0]const u8 {
+        return self.iterator.next();
     }
 
     fn peek(self: *Self) ?[:0]const u8 {
         if (self.current) |_| {} else {
-            self.current = self.iterator.next();
+            self.current = self.read();
         }
         return self.current;
     }
 
     fn next(self: *Self) ?[:0]const u8 {
         if (self.current) |token| {
-            self.current = undefined;
+            self.current = null;
             return token;
         }
-        return self.iterator.next();
+        return self.read();
     }
 
     fn is_flag(self: *Self) bool {
@@ -190,8 +196,12 @@ const ArgParser = struct {
     }
 
     fn parseAllFlags(self: *Self) !void {
-        while (self.is_flag()) {
-            try self.nextFlag();
+        while (self.peek()) |_| {
+            if (self.is_flag()) {
+                try self.nextFlag();
+            } else {
+                _ = self.next();
+            }
         }
     }
 
@@ -227,7 +237,7 @@ const Config = struct {
 
     fn parseAddress(self: *Self, args: Arguments) !void {
         if (args.address) |addr| {
-            if (std.net.isValidHostName(addr)) {
+            if (net.isValidHostName(addr)) {
                 self.address = addr;
             }
         }
@@ -255,6 +265,19 @@ fn showHelp() noreturn {
     std.process.exit(0);
 }
 
+fn showError(comptime fmt: []const u8, args: anytype) noreturn {
+    var writer = std.io.getStdErr().writer();
+    std.fmt.format(writer, fmt, args) catch {};
+    _ = writer.write("\n") catch {};
+    std.process.exit(1);
+}
+
+fn showLog(comptime fmt: []const u8, args: anytype) void {
+    var writer = std.io.getStdOut().writer();
+    std.fmt.format(writer, fmt, args) catch {};
+    _ = writer.write("\n") catch {};
+}
+
 fn loadConfig() !Config {
     var parser = ArgParser.init(std.process.args());
     const args = parser.parse() catch return showHelp();
@@ -266,7 +289,74 @@ fn loadConfig() !Config {
     return conf;
 }
 
+fn serverHandleMessage(mes: Message, stream: net.Stream) !Message {
+    _ = stream;
+    switch (mes.header) {
+        .Ping => |pl| {
+            var num = std.mem.littleToNative(@TypeOf(pl.num), pl.num);
+            num *= 2;
+            return Message{
+                .header = .{
+                    .PingReply = .{
+                        .num = num,
+                    },
+                },
+            };
+        },
+        .PingReply, .None => unreachable,
+    }
+}
+
+fn run_server(config: Config) !void {
+    const addr = net.Address.resolveIp(config.address, config.port) catch showError(
+        "Invalid bind IP address",
+        .{},
+    );
+    var server = net.StreamServer.init(.{});
+    server.listen(addr) catch showError(
+        "Could not listen on {s}:{d}",
+        .{
+            config.address,
+            config.port,
+        },
+    );
+    showLog(
+        "Server listening on {s}:{d}",
+        .{
+            config.address,
+            config.port,
+        },
+    );
+    while (server.accept()) |client| {
+        var stream = client.stream;
+        const mes = try readMessage(stream.reader());
+        const resp = try serverHandleMessage(mes, client.stream);
+        try writeMessage(resp, stream.writer());
+    } else |_| {
+        showError("Connection failure", .{});
+    }
+}
+fn run_client(config: Config, allocator: std.mem.Allocator) !void {
+    var stream = try net.tcpConnectToHost(allocator, config.address, config.port);
+    const mes = Message{
+        .header = .{
+            .Ping = .{
+                .num = 7,
+            },
+        },
+    };
+    try writeMessage(mes, stream.writer());
+    const resp = try readMessage(stream.reader());
+    showLog("Server response: {d}\n", .{resp.header.PingReply.num});
+}
+
 pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var allocator = gpa.allocator();
     const conf = try loadConfig();
-    _ = conf;
+    if (conf.is_server) {
+        try run_server(conf);
+    } else {
+        try run_client(conf, allocator);
+    }
 }
