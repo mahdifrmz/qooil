@@ -5,26 +5,58 @@ const expect = std.testing.expect;
 
 const TagType = u16;
 
+const ClientErrors = enum(u16) { InvalidMessageType };
+
 const Header = union(enum(TagType)) {
-    None: void,
+    const Self = @This();
+
+    None: packed struct {},
     Ping: packed struct { num: u32 },
     PingReply: packed struct { num: u32 },
+    Quit: packed struct {},
+    QuitReply: packed struct {},
+    Error: packed struct { code: u16, arg1: u32, arg2: u32 },
 };
 
 const Message = struct {
     header: Header,
 };
 
-fn writeHeader(header: *const Header, strm: anytype) !void {
+fn headerToLittle(hdr: anytype) void {
+    var data = hdr;
+    switch (@typeInfo(@TypeOf(data))) {
+        .Pointer => |ptr| {
+            switch (@typeInfo(ptr.child)) {
+                .Struct => |strct| {
+                    inline for (strct.fields) |field| {
+                        switch (@typeInfo(field.type)) {
+                            .Int => {
+                                @field(data.*, field.name) = std.mem.nativeToLittle(field.type, @field(data.*, field.name));
+                            },
+                            else => {},
+                        }
+                    }
+                },
+                else => unreachable,
+            }
+        },
+        else => unreachable,
+    }
+}
+
+fn writeHeader(header: Header, strm: anytype) !void {
+    var header_mut = header;
     const fields = @typeInfo(Header).Union.fields;
     const options = @typeInfo(@typeInfo(Header).Union.tag_type orelse unreachable).Enum.fields;
-    const idx = @intFromEnum(header.*);
+    const idx = @intFromEnum(header_mut);
 
     inline for (fields) |f| {
         inline for (options) |o| {
             if (std.mem.eql(u8, o.name, f.name)) {
                 if (o.value == idx) {
-                    return try strm.writeAll(std.mem.asBytes(&@field(header.*, f.name)));
+                    var data = &@field(header_mut, f.name);
+                    headerToLittle(data);
+                    try strm.writeAll(std.mem.asBytes(data));
                 }
             }
         }
@@ -55,7 +87,7 @@ fn readHeader(idx: TagType, strm: anytype) !Header {
 fn writeMessage(mes: Message, strm: anytype) !void {
     const idx = std.mem.nativeToLittle(TagType, @intFromEnum(mes.header));
     try strm.writeAll(std.mem.asBytes(&idx));
-    try writeHeader(&mes.header, strm);
+    try writeHeader(mes.header, strm);
 }
 
 fn readMessage(strm: anytype) !Message {
@@ -289,53 +321,86 @@ fn loadConfig() !Config {
     return conf;
 }
 
-fn serverHandleMessage(mes: Message, stream: net.Stream) !Message {
-    _ = stream;
-    switch (mes.header) {
-        .Ping => |pl| {
-            var num = std.mem.littleToNative(@TypeOf(pl.num), pl.num);
-            num *= 2;
-            return Message{
-                .header = .{
-                    .PingReply = .{
-                        .num = num,
-                    },
-                },
-            };
-        },
-        .PingReply, .None => unreachable,
-    }
-}
+const Server = struct {
+    const Self = @This();
 
-fn run_server(config: Config) !void {
-    const addr = net.Address.resolveIp(config.address, config.port) catch showError(
-        "Invalid bind IP address",
-        .{},
-    );
-    var server = net.StreamServer.init(.{});
-    server.listen(addr) catch showError(
-        "Could not listen on {s}:{d}",
-        .{
-            config.address,
-            config.port,
-        },
-    );
-    showLog(
-        "Server listening on {s}:{d}",
-        .{
-            config.address,
-            config.port,
-        },
-    );
-    while (server.accept()) |client| {
-        var stream = client.stream;
-        const mes = try readMessage(stream.reader());
-        const resp = try serverHandleMessage(mes, client.stream);
-        try writeMessage(resp, stream.writer());
-    } else |_| {
-        showError("Connection failure", .{});
+    is_exiting: bool,
+
+    fn init() Self {
+        return .{
+            .is_exiting = false,
+        };
     }
-}
+
+    fn serverHandleMessage(self: *Self, mes: Message, stream: net.Stream) !Message {
+        _ = stream;
+        switch (mes.header) {
+            .Ping => |pl| {
+                var num = std.mem.littleToNative(@TypeOf(pl.num), pl.num);
+                num *= 2;
+                return Message{
+                    .header = .{
+                        .PingReply = .{
+                            .num = num,
+                        },
+                    },
+                };
+            },
+            .Quit => {
+                self.is_exiting = true;
+                return Message{
+                    .header = .{
+                        .QuitReply = .{},
+                    },
+                };
+            },
+            else => {
+                return Message{
+                    .header = .{
+                        .Error = .{
+                            .code = @intFromEnum(ClientErrors.InvalidMessageType),
+                            .arg1 = @intFromEnum(mes.header),
+                            .arg2 = 0,
+                        },
+                    },
+                };
+            },
+        }
+    }
+
+    fn run_server(self: *Self, config: Config) !void {
+        const addr = net.Address.resolveIp(config.address, config.port) catch showError(
+            "Invalid bind IP address",
+            .{},
+        );
+        var stream_server = net.StreamServer.init(.{});
+        stream_server.listen(addr) catch showError(
+            "Could not listen on {s}:{d}",
+            .{
+                config.address,
+                config.port,
+            },
+        );
+        showLog(
+            "Server listening on {s}:{d}",
+            .{
+                config.address,
+                config.port,
+            },
+        );
+        while (stream_server.accept()) |client| {
+            var stream = client.stream;
+            while (!self.is_exiting) {
+                const mes = try readMessage(stream.reader());
+                const resp = try self.serverHandleMessage(mes, client.stream);
+                try writeMessage(resp, stream.writer());
+            }
+        } else |_| {
+            showError("Connection failure", .{});
+        }
+    }
+};
+
 fn run_client(config: Config, allocator: std.mem.Allocator) !void {
     var stream = try net.tcpConnectToHost(allocator, config.address, config.port);
     const mes = Message{
@@ -355,7 +420,8 @@ pub fn main() !void {
     var allocator = gpa.allocator();
     const conf = try loadConfig();
     if (conf.is_server) {
-        try run_server(conf);
+        var server = Server.init();
+        try server.run_server(conf);
     } else {
         try run_client(conf, allocator);
     }
