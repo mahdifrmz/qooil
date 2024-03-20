@@ -31,7 +31,10 @@ fn headerToLittle(hdr: anytype) void {
                     inline for (strct.fields) |field| {
                         switch (@typeInfo(field.type)) {
                             .Int => {
-                                @field(data.*, field.name) = std.mem.nativeToLittle(field.type, @field(data.*, field.name));
+                                @field(data.*, field.name) = std.mem.nativeToLittle(
+                                    field.type,
+                                    @field(data.*, field.name),
+                                );
                             },
                             else => {},
                         }
@@ -57,6 +60,7 @@ fn writeHeader(header: Header, strm: anytype) !void {
                     var data = &@field(header_mut, f.name);
                     headerToLittle(data);
                     try strm.writeAll(std.mem.asBytes(data));
+                    return;
                 }
             }
         }
@@ -172,7 +176,7 @@ const ArgParser = struct {
         return self.read();
     }
 
-    fn is_flag(self: *Self) bool {
+    fn isFlag(self: *Self) bool {
         const token = self.peek();
         if (token) |tkn| {
             return tkn.len == 2 and tkn[0] == '-';
@@ -216,7 +220,7 @@ const ArgParser = struct {
     }
 
     fn nextPositional(self: *Self, name: []const u8) ![:0]const u8 {
-        while (self.is_flag()) {
+        while (self.isFlag()) {
             try self.nextFlag();
         }
         if (self.next()) |value| {
@@ -229,7 +233,7 @@ const ArgParser = struct {
 
     fn parseAllFlags(self: *Self) !void {
         while (self.peek()) |_| {
-            if (self.is_flag()) {
+            if (self.isFlag()) {
                 try self.nextFlag();
             } else {
                 _ = self.next();
@@ -321,18 +325,23 @@ fn loadConfig() !Config {
     return conf;
 }
 
-const Server = struct {
+/// Created per client.
+/// File/stream agnostic.
+/// Works on anything that implements reader() & writer().
+const ServerHandler = struct {
     const Self = @This();
 
-    is_exiting: bool,
+    isExiting: bool,
+    config: *const Config,
 
-    fn init() Self {
+    fn init(config: *const Config) Self {
         return .{
-            .is_exiting = false,
+            .isExiting = false,
+            .config = config,
         };
     }
 
-    fn serverHandleMessage(self: *Self, mes: Message, stream: net.Stream) !Message {
+    fn handleMessage(self: *Self, mes: Message, stream: anytype) !Message {
         _ = stream;
         switch (mes.header) {
             .Ping => |pl| {
@@ -347,7 +356,7 @@ const Server = struct {
                 };
             },
             .Quit => {
-                self.is_exiting = true;
+                self.isExiting = true;
                 return Message{
                     .header = .{
                         .QuitReply = .{},
@@ -368,8 +377,27 @@ const Server = struct {
         }
     }
 
-    fn run_server(self: *Self, config: Config) !void {
-        const addr = net.Address.resolveIp(config.address, config.port) catch showError(
+    fn handleClient(self: *Self, stream: anytype) !void {
+        var stream_mut = stream;
+        while (!self.isExiting) {
+            const mes = try readMessage(stream_mut.reader());
+            const resp = try self.handleMessage(mes, stream_mut);
+            try writeMessage(resp, stream_mut.writer());
+        }
+    }
+};
+
+const Server = struct {
+    const Self = @This();
+
+    config: Config,
+
+    fn init(config: Config) Self {
+        return .{ .config = config };
+    }
+
+    fn runServer(self: *Self) !void {
+        const addr = net.Address.resolveIp(self.config.address, self.config.port) catch showError(
             "Invalid bind IP address",
             .{},
         );
@@ -377,31 +405,27 @@ const Server = struct {
         stream_server.listen(addr) catch showError(
             "Could not listen on {s}:{d}",
             .{
-                config.address,
-                config.port,
+                self.config.address,
+                self.config.port,
             },
         );
         showLog(
             "Server listening on {s}:{d}",
             .{
-                config.address,
-                config.port,
+                self.config.address,
+                self.config.port,
             },
         );
         while (stream_server.accept()) |client| {
-            var stream = client.stream;
-            while (!self.is_exiting) {
-                const mes = try readMessage(stream.reader());
-                const resp = try self.serverHandleMessage(mes, client.stream);
-                try writeMessage(resp, stream.writer());
-            }
+            var handler = ServerHandler.init(&self.config);
+            try handler.handleClient(client.stream);
         } else |_| {
             showError("Connection failure", .{});
         }
     }
 };
 
-fn run_client(config: Config, allocator: std.mem.Allocator) !void {
+fn runClient(config: Config, allocator: std.mem.Allocator) !void {
     var stream = try net.tcpConnectToHost(allocator, config.address, config.port);
     const mes = Message{
         .header = .{
@@ -420,9 +444,103 @@ pub fn main() !void {
     var allocator = gpa.allocator();
     const conf = try loadConfig();
     if (conf.is_server) {
-        var server = Server.init();
-        try server.run_server(conf);
+        var server = Server.init(conf);
+        try server.runServer();
     } else {
-        try run_client(conf, allocator);
+        try runClient(conf, allocator);
     }
+}
+
+const Channel = struct {
+    const Self = @This();
+    const Reader = std.io.Reader(*Self, std.os.ReadError, read);
+    const Writer = std.io.Writer(*Self, std.os.WriteError, write);
+
+    pipe: [2]std.os.fd_t,
+
+    pub fn init() ![2]Self {
+        const p1 = try std.os.pipe();
+        const p2 = try std.os.pipe();
+
+        return .{ .{
+            .pipe = .{ p2[0], p1[1] },
+        }, .{
+            .pipe = .{ p1[0], p2[1] },
+        } };
+    }
+    pub fn deinit(self: *Self) void {
+        std.os.close(self.pipe[0]);
+        std.os.close(self.pipe[1]);
+    }
+    pub fn read(self: *Self, buf: []u8) std.os.ReadError!usize {
+        return std.os.read(self.pipe[0], buf);
+    }
+    pub fn write(self: *Self, buf: []const u8) std.os.WriteError!usize {
+        return std.os.write(self.pipe[1], buf);
+    }
+    pub fn reader(self: *Self) Reader {
+        return .{ .context = self };
+    }
+    pub fn writer(self: *Self) Writer {
+        return .{ .context = self };
+    }
+};
+
+const ServerTester = struct {
+    thread: std.Thread,
+    channel: Channel,
+
+    const Self = @This();
+
+    fn runServer(config: Config, channel: Channel) void {
+        var channel_mut = channel;
+        var handler = ServerHandler.init(&config);
+        handler.handleClient(channel_mut) catch {};
+        channel_mut.deinit();
+    }
+
+    fn init(config: Config) !Self {
+        const channels = try Channel.init();
+        const thread = try std.Thread.spawn(.{}, runServer, .{ config, channels[0] });
+        return .{
+            .thread = thread,
+            .channel = channels[1],
+        };
+    }
+    fn deinit(self: *Self) void {
+        self.channel.deinit();
+    }
+    fn send(self: *Self, mes: Message) !void {
+        try writeMessage(mes, self.channel.writer());
+    }
+    fn recv(self: *Self) !Message {
+        return try readMessage(self.channel.reader());
+    }
+    fn quit(self: *Self) !void {
+        try self.send(.{ .header = .{ .Quit = .{} } });
+        switch ((try self.recv()).header) {
+            .QuitReply => return,
+            else => unreachable,
+        }
+        self.thread.join();
+    }
+};
+
+test "ping" {
+    const num: u32 = 4;
+    var server = try ServerTester.init(Config.init());
+    defer server.deinit();
+    try server.send(.{
+        .header = .{
+            .Ping = .{
+                .num = num,
+            },
+        },
+    });
+    const mesg = try server.recv();
+    switch (mesg.header) {
+        .PingReply => |hdr| try std.testing.expectEqual(num * 2, hdr.num),
+        else => try std.testing.expectEqual(@intFromEnum(mesg.header), 3),
+    }
+    try server.quit();
 }
