@@ -62,33 +62,32 @@ fn ServerHandler(comptime T: type) type {
         }
         fn changeCwd(self: *Self, path: []const u8) !void {
             var iter = std.mem.splitScalar(u8, path, '/');
-            var depth = self.depth;
             while (iter.next()) |seg| {
                 const is_dotdot = std.mem.eql(u8, seg, "..");
                 if (is_dotdot) {
-                    if (depth > 0) {
-                        depth -= 1;
+                    if (self.depth > 0) {
+                        self.depth -= 1;
                     } else {
-                        return;
+                        continue;
                     }
                 } else {
-                    depth += 1;
+                    self.depth += 1;
                 }
-            }
-            const newCwd = self.cwd.openDir(path, .{
-                .no_follow = true,
-            }) catch |err| {
-                const cerr = switch (err) {
-                    error.FileNotFound => ClientError.NonExisting,
-                    error.NotDir => ClientError.IsNotDir,
-                    error.AccessDenied => ClientError.AccessDenied,
-                    else => ClientError.CantOpen,
+
+                const newCwd = self.cwd.openDir(seg, .{
+                    .no_follow = true,
+                }) catch |err| {
+                    const cerr = switch (err) {
+                        error.FileNotFound => ClientError.NonExisting,
+                        error.NotDir => ClientError.IsNotDir,
+                        error.AccessDenied => ClientError.AccessDenied,
+                        else => ClientError.CantOpen,
+                    };
+                    return self.sendError(cerr, 0, 0);
                 };
-                return self.sendError(cerr, 0, 0);
-            };
-            self.depth = depth;
-            self.cwd.close();
-            self.cwd = newCwd;
+                self.cwd.close();
+                self.cwd = newCwd;
+            }
         }
         fn handleMessage(self: *Self, mes: Message) !void {
             switch (mes.header) {
@@ -135,11 +134,13 @@ fn ServerHandler(comptime T: type) type {
                     try self.send(
                         .{
                             .Path = .{
-                                .length = @intCast(path.len - root_path.len - 1),
+                                .length = @intCast(@max(path.len - root_path.len, 1)),
                             },
                         },
                     );
-                    self.stream.writer().writeAll(path[root_path.len + 1 ..]) catch unreachable;
+                    if (path.len == root_path.len)
+                        self.stream.writer().writeAll("/") catch unreachable;
+                    self.stream.writer().writeAll(path[root_path.len..]) catch unreachable;
                     return;
                 },
                 else => return self.sendError(
@@ -371,7 +372,13 @@ test "working directory" {
     try server.sendCd(temp_dir);
     try server.expectOk();
     try server.sendPwd();
-    try server.expectPath(@intCast(temp_dir.len));
+    try server.expectPath(@intCast(temp_dir.len + 1));
+    try server.expectPayload("/");
     try server.expectPayload(temp_dir);
+    try server.sendCd("../../..");
+    try server.expectOk();
+    try server.sendPwd();
+    try server.expectPath(1);
+    try server.expectPayload("/");
     try server.quit();
 }

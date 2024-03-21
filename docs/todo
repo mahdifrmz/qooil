@@ -1,5 +1,5 @@
 ### Bugs
-* test: cd MUST not exit original cwd
+* clear error handling strategy
 
 ### Features
 * download files
@@ -13,4 +13,3 @@
 * encryption
 
 ### Refactors
-* clear error handling strategy
