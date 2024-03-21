@@ -22,8 +22,8 @@ pub const Header = union(enum(TagType)) {
     Ok: packed struct {},
 
     None: packed struct {},
-    Ping: packed struct { num: u32 },
-    PingReply: packed struct { num: u32 },
+    Ping: packed struct {},
+    PingReply: packed struct {},
     Quit: packed struct {},
     QuitReply: packed struct {},
     Error: packed struct { code: u16, arg1: u32, arg2: u32 },

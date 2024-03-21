@@ -62,14 +62,10 @@ fn ServerHandler(comptime T: type) type {
 
         fn handleMessage(self: *Self, mes: Message) !void {
             switch (mes.header) {
-                .Ping => |pl| {
-                    var num = std.mem.littleToNative(@TypeOf(pl.num), pl.num);
-                    num *= 2;
+                .Ping => {
                     return self.send(
                         .{
-                            .PingReply = .{
-                                .num = num,
-                            },
+                            .PingReply = .{},
                         },
                     );
                 },
@@ -276,19 +272,16 @@ const ServerTester = struct {
 };
 
 test "ping" {
-    const num: u32 = 4;
     var server = try ServerTester.init(Config.init(std.testing.allocator));
     defer server.deinit();
     try server.send(.{
         .header = .{
-            .Ping = .{
-                .num = num,
-            },
+            .Ping = .{},
         },
     });
     const mesg = try server.recv();
     switch (mesg.header) {
-        .PingReply => |hdr| try std.testing.expectEqual(num * 2, hdr.num),
+        .PingReply => {},
         else => unreachable,
     }
     try server.quit();
