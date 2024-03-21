@@ -317,6 +317,18 @@ const ServerTester = struct {
             (try self.recv()).header,
         );
     }
+    fn expectError(self: *Self, code: ClientError, arg1: u32, arg2: u32) !void {
+        try std.testing.expectEqual(
+            Header{
+                .Error = .{
+                    .code = @intFromEnum(code),
+                    .arg1 = arg1,
+                    .arg2 = arg2,
+                },
+            },
+            (try self.recv()).header,
+        );
+    }
     fn expectPath(self: *Self, length: u16) !void {
         try std.testing.expectEqual(
             Header{
@@ -381,4 +393,26 @@ test "working directory" {
     try server.expectPath(1);
     try server.expectPayload("/");
     try server.quit();
+}
+
+test "invalid commands" {
+    const allocator = std.testing.allocator;
+    var server = try ServerTester.init(Config.init(allocator));
+    defer server.deinit();
+    try server.send(
+        .{
+            .header = .{
+                .Ok = .{},
+            },
+        },
+    );
+    try server.expectError(
+        ClientError.InvalidMessageType,
+        @intFromEnum(
+            Header{
+                .Ok = .{},
+            },
+        ),
+        0,
+    );
 }
