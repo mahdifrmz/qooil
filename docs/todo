@@ -1,4 +1,17 @@
-### bug
-* clear error handling strategy
+### Bugs
 * pwd MUST not expose absolute path
 * cd MUST not exit original cwd
+
+### Features
+* download files
+* upload file
+* remove file
+* directory manipulation
+* client cli
+* client history
+* parallel transfers
+* authentication
+* encryption
+
+### Refactors
+* clear error handling strategy
