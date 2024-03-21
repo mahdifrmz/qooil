@@ -8,7 +8,10 @@
 * client cli
 * client history
 * parallel transfers
+* multi-root
+* proxy
 * authentication
+* per-dir/file permissions
 * encryption
 
 ### Refactors
