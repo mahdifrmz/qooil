@@ -3,6 +3,7 @@ const std = @import("std");
 const TagType = u16;
 pub const ClientError = enum(u16) {
     InvalidMessageType,
+    CorruptMessageTag,
     MaxPathLengthExceeded,
     UnexpectedEndOfConnection,
     NonExisting,
@@ -21,6 +22,7 @@ pub const Header = union(enum(TagType)) {
     PingReply: packed struct {},
     Quit: packed struct {},
     QuitReply: packed struct {},
+    Corrupt: packed struct { tag: TagType },
     Error: packed struct { code: u16, arg1: u32, arg2: u32 },
 };
 
@@ -91,7 +93,11 @@ fn readHeader(idx: TagType, strm: anytype) !Header {
         }
     }
 
-    unreachable;
+    return .{
+        .Corrupt = .{
+            .tag = idx,
+        },
+    };
 }
 
 pub fn writeMessage(mes: Message, strm: anytype) !void {

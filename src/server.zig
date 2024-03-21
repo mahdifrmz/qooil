@@ -143,6 +143,11 @@ fn ServerHandler(comptime T: type) type {
                     try self.stream.writer().writeAll(path[root_path.len..]);
                     return;
                 },
+                .Corrupt => |hdr| return self.sendError(
+                    ClientError.CorruptMessageTag,
+                    hdr.tag,
+                    0,
+                ),
                 else => return self.sendError(
                     ClientError.InvalidMessageType,
                     @intFromEnum(mes.header),
@@ -413,6 +418,19 @@ test "invalid commands" {
                 .Ok = .{},
             },
         ),
+        0,
+    );
+}
+
+test "corrupt tag" {
+    const allocator = std.testing.allocator;
+    var server = try ServerTester.init(Config.init(allocator));
+    defer server.deinit();
+    const corrupt_tag = std.mem.nativeToLittle(u16, 0xeeee);
+    _ = try server.write(std.mem.asBytes(&corrupt_tag));
+    try server.expectError(
+        ClientError.CorruptMessageTag,
+        corrupt_tag,
         0,
     );
 }
