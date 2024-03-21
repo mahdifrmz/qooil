@@ -13,15 +13,10 @@ pub const ClientError = enum(u16) {
 };
 
 pub const Header = union(enum(TagType)) {
-    const Self = @This();
-
     Cd: packed struct { length: u8 },
     Pwd: packed struct {},
-
     Path: packed struct { length: u16 },
     Ok: packed struct {},
-
-    None: packed struct {},
     Ping: packed struct {},
     PingReply: packed struct {},
     Quit: packed struct {},

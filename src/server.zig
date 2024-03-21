@@ -19,23 +19,24 @@ fn ServerHandler(comptime T: type) type {
         isExiting: bool,
         config: *const Config,
         cwd: std.fs.Dir,
-        cwd_is_original: bool,
+        cwd_original: std.fs.Dir,
         stream: *T,
+        depth: usize,
 
         fn init(config: *const Config, stream: *T) Self {
+            const cwd = std.fs.cwd();
             return .{
                 .isExiting = false,
                 .config = config,
-                .cwd = std.fs.cwd(),
-                .cwd_is_original = true,
+                .cwd_original = cwd,
+                .cwd = cwd.openDir(".", .{}) catch unreachable,
                 .stream = stream,
+                .depth = 0,
             };
         }
 
         fn deinit(self: *Self) void {
-            if (!self.cwd_is_original) {
-                self.cwd.close();
-            }
+            self.cwd.close();
         }
 
         fn sendError(self: *Self, err: ClientError, arg1: u32, arg2: u32) !void {
@@ -59,7 +60,36 @@ fn ServerHandler(comptime T: type) type {
         fn recv(self: *Self) !Message {
             return protocol.readMessage(self.stream.reader());
         }
-
+        fn changeCwd(self: *Self, path: []const u8) !void {
+            var iter = std.mem.splitScalar(u8, path, '/');
+            var depth = self.depth;
+            while (iter.next()) |seg| {
+                const is_dotdot = std.mem.eql(u8, seg, "..");
+                if (is_dotdot) {
+                    if (depth > 0) {
+                        depth -= 1;
+                    } else {
+                        return;
+                    }
+                } else {
+                    depth += 1;
+                }
+            }
+            const newCwd = self.cwd.openDir(path, .{
+                .no_follow = true,
+            }) catch |err| {
+                const cerr = switch (err) {
+                    error.FileNotFound => ClientError.NonExisting,
+                    error.NotDir => ClientError.IsNotDir,
+                    error.AccessDenied => ClientError.AccessDenied,
+                    else => ClientError.CantOpen,
+                };
+                return self.sendError(cerr, 0, 0);
+            };
+            self.depth = depth;
+            self.cwd.close();
+            self.cwd = newCwd;
+        }
         fn handleMessage(self: *Self, mes: Message) !void {
             switch (mes.header) {
                 .Ping => {
@@ -90,22 +120,7 @@ fn ServerHandler(comptime T: type) type {
                         );
                     }
                     const path = buf[0..count];
-                    const newCwd = self.cwd.openDir(path, .{
-                        .no_follow = true,
-                    }) catch |err| {
-                        const cerr = switch (err) {
-                            error.FileNotFound => ClientError.NonExisting,
-                            error.NotDir => ClientError.IsNotDir,
-                            error.AccessDenied => ClientError.AccessDenied,
-                            else => ClientError.CantOpen,
-                        };
-                        return self.sendError(cerr, 0, 0);
-                    };
-                    if (!self.cwd_is_original) {
-                        self.cwd.close();
-                        self.cwd_is_original = false;
-                    }
-                    self.cwd = newCwd;
+                    try self.changeCwd(path);
                     return self.send(
                         .{
                             .Ok = .{},

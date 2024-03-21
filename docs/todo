@@ -1,6 +1,6 @@
 ### Bugs
 * pwd MUST not expose absolute path
-* cd MUST not exit original cwd
+* test: cd MUST not exit original cwd
 
 ### Features
 * download files
