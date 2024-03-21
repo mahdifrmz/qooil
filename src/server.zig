@@ -139,8 +139,8 @@ fn ServerHandler(comptime T: type) type {
                         },
                     );
                     if (path.len == root_path.len)
-                        self.stream.writer().writeAll("/") catch unreachable;
-                    self.stream.writer().writeAll(path[root_path.len..]) catch unreachable;
+                        try self.stream.writer().writeAll("/");
+                    try self.stream.writer().writeAll(path[root_path.len..]);
                     return;
                 },
                 else => return self.sendError(

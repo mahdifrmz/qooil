@@ -1,5 +1,4 @@
 ### Bugs
-* clear error handling strategy
 
 ### Features
 * download files
@@ -13,3 +12,6 @@
 * encryption
 
 ### Refactors
+
+### Test
+* Error on invalid command
