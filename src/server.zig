@@ -62,19 +62,21 @@ fn ServerHandler(comptime T: type) type {
         }
         fn changeCwd(self: *Self, path: []const u8) !void {
             var iter = std.mem.splitScalar(u8, path, '/');
+            var depth = self.depth;
+            var cwd = try self.cwd.openDir(".", .{});
             while (iter.next()) |seg| {
                 const is_dotdot = std.mem.eql(u8, seg, "..");
                 if (is_dotdot) {
-                    if (self.depth > 0) {
-                        self.depth -= 1;
+                    if (depth > 0) {
+                        depth -= 1;
                     } else {
                         continue;
                     }
                 } else {
-                    self.depth += 1;
+                    depth += 1;
                 }
 
-                const newCwd = self.cwd.openDir(seg, .{
+                const new_cwd = cwd.openDir(seg, .{
                     .no_follow = true,
                 }) catch |err| {
                     const cerr = switch (err) {
@@ -83,11 +85,20 @@ fn ServerHandler(comptime T: type) type {
                         error.AccessDenied => ClientError.AccessDenied,
                         else => ClientError.CantOpen,
                     };
+                    cwd.close();
                     return self.sendError(cerr, 0, 0);
                 };
-                self.cwd.close();
-                self.cwd = newCwd;
+                cwd.close();
+                cwd = new_cwd;
             }
+            self.cwd.close();
+            self.cwd = cwd;
+            self.depth = depth;
+            try self.send(
+                .{
+                    .Ok = .{},
+                },
+            );
         }
         fn handleMessage(self: *Self, mes: Message) !void {
             switch (mes.header) {
@@ -119,12 +130,7 @@ fn ServerHandler(comptime T: type) type {
                         );
                     }
                     const path = buf[0..count];
-                    try self.changeCwd(path);
-                    return self.send(
-                        .{
-                            .Ok = .{},
-                        },
-                    );
+                    return try self.changeCwd(path);
                 },
                 .Pwd => |_| {
                     var buf = [_]u8{0} ** std.os.PATH_MAX;
@@ -154,8 +160,6 @@ fn ServerHandler(comptime T: type) type {
                     0,
                 ),
             }
-
-            unreachable;
         }
 
         fn handleClient(self: *Self) !void {
@@ -286,11 +290,12 @@ const ServerTester = struct {
     }
     fn quit(self: *Self) !void {
         try self.send(.{ .header = .{ .Quit = .{} } });
-        switch ((try self.recv()).header) {
-            .QuitReply => return,
-            else => unreachable,
-        }
-        self.thread.join();
+        try std.testing.expectEqual(
+            Header{
+                .QuitReply = .{},
+            },
+            (try self.recv()).header,
+        );
     }
 
     fn sendCd(self: *Self, path: []const u8) !void {
@@ -386,17 +391,29 @@ test "working directory" {
     defer removeTestDir(temp_dir);
     var server = try ServerTester.init(Config.init(allocator));
     defer server.deinit();
+
     try server.sendCd(temp_dir);
     try server.expectOk();
+
     try server.sendPwd();
     try server.expectPath(@intCast(temp_dir.len + 1));
     try server.expectPayload("/");
     try server.expectPayload(temp_dir);
+
     try server.sendCd("../../..");
     try server.expectOk();
+
     try server.sendPwd();
     try server.expectPath(1);
     try server.expectPayload("/");
+
+    try server.sendCd(testdir ++ "/non-existing");
+    try server.expectError(ClientError.NonExisting, 0, 0);
+
+    try server.sendPwd();
+    try server.expectPath(1);
+    try server.expectPayload("/");
+
     try server.quit();
 }
 
