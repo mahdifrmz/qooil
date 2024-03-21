@@ -129,15 +129,17 @@ fn ServerHandler(comptime T: type) type {
                 },
                 .Pwd => |_| {
                     var buf = [_]u8{0} ** std.os.PATH_MAX;
+                    var root_buf = [_]u8{0} ** std.os.PATH_MAX;
                     const path = self.cwd.realpath(".", &buf) catch unreachable;
+                    const root_path = self.cwd_original.realpath(".", &root_buf) catch unreachable;
                     try self.send(
                         .{
                             .Path = .{
-                                .length = @intCast(path.len),
+                                .length = @intCast(path.len - root_path.len - 1),
                             },
                         },
                     );
-                    self.stream.writer().writeAll(path) catch unreachable;
+                    self.stream.writer().writeAll(path[root_path.len + 1 ..]) catch unreachable;
                     return;
                 },
                 else => return self.sendError(
@@ -284,7 +286,65 @@ const ServerTester = struct {
         }
         self.thread.join();
     }
+
+    fn sendCd(self: *Self, path: []const u8) !void {
+        try self.send(
+            .{
+                .header = .{
+                    .Cd = .{
+                        .length = @intCast(path.len),
+                    },
+                },
+            },
+        );
+        _ = try self.write(path);
+    }
+    fn sendPwd(self: *Self) !void {
+        try self.send(
+            .{
+                .header = .{
+                    .Pwd = .{},
+                },
+            },
+        );
+    }
+    fn expectOk(self: *Self) !void {
+        try std.testing.expectEqual(
+            Header{
+                .Ok = .{},
+            },
+            (try self.recv()).header,
+        );
+    }
+    fn expectPath(self: *Self, length: u16) !void {
+        try std.testing.expectEqual(
+            Header{
+                .Path = .{
+                    .length = length,
+                },
+            },
+            (try self.recv()).header,
+        );
+    }
 };
+
+const testdir = "testdir";
+
+fn makeTestDir() ![]u8 {
+    const uuid = std.crypto.random.int(u128);
+    const path = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{s}/{d}",
+        .{ testdir, uuid },
+    );
+    try std.fs.cwd().makeDir(path);
+    return path;
+}
+
+fn removeTestDir(name: []const u8) void {
+    std.fs.cwd().deleteDir(name) catch {};
+    std.testing.allocator.free(name);
+}
 
 test "ping" {
     var server = try ServerTester.init(Config.init(std.testing.allocator));
@@ -303,33 +363,15 @@ test "ping" {
 }
 
 test "working directory" {
-    const testdir = "testdir";
-    var server = try ServerTester.init(Config.init(std.testing.allocator));
+    const allocator = std.testing.allocator;
+    const temp_dir = try makeTestDir();
+    defer removeTestDir(temp_dir);
+    var server = try ServerTester.init(Config.init(allocator));
     defer server.deinit();
-    try server.send(.{
-        .header = .{
-            .Cd = .{
-                .length = testdir.len,
-            },
-        },
-    });
-    _ = try server.write(testdir);
-    switch ((try server.recv()).header) {
-        .Ok => {},
-        else => unreachable,
-    }
-    try server.send(.{
-        .header = .{
-            .Pwd = .{},
-        },
-    });
-    const len = switch ((try server.recv()).header) {
-        .Path => |hdr| hdr.length,
-        else => unreachable,
-    };
-    var buf = [_]u8{0} ** std.os.PATH_MAX;
-    const read_count: u16 = @intCast(try server.read(buf[0..len]));
-    try std.testing.expectEqual(len, read_count);
-    try std.testing.expectStringEndsWith(buf[0..len], "testdir");
+    try server.sendCd(temp_dir);
+    try server.expectOk();
+    try server.sendPwd();
+    try server.expectPath(@intCast(temp_dir.len));
+    try server.expectPayload(temp_dir);
     try server.quit();
 }

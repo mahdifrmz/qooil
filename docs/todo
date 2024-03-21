@@ -1,5 +1,4 @@
 ### Bugs
-* pwd MUST not expose absolute path
 * test: cd MUST not exit original cwd
 
 ### Features
