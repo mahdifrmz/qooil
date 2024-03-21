@@ -18,7 +18,7 @@ pub const Header = union(enum(TagType)) {
     Cd: packed struct { length: u8 },
     Pwd: packed struct {},
 
-    Path: packed struct { length: u8 },
+    Path: packed struct { length: u16 },
     Ok: packed struct {},
 
     None: packed struct {},

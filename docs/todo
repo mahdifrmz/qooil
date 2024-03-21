@@ -1,3 +1,5 @@
-> protocol impl [done]
-> automated tests [done]
-> PATH limit
+### bug
+* clear error handling strategy
+* remove Ping numbers
+* pwd MUST not expose absolute path
+* cd MUST not exit original cwd

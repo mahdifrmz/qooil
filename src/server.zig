@@ -19,6 +19,7 @@ fn ServerHandler(comptime T: type) type {
         isExiting: bool,
         config: *const Config,
         cwd: std.fs.Dir,
+        cwd_is_original: bool,
         stream: *T,
 
         fn init(config: *const Config, stream: *T) Self {
@@ -26,12 +27,15 @@ fn ServerHandler(comptime T: type) type {
                 .isExiting = false,
                 .config = config,
                 .cwd = std.fs.cwd(),
+                .cwd_is_original = true,
                 .stream = stream,
             };
         }
 
         fn deinit(self: *Self) void {
-            self.cwd.close();
+            if (!self.cwd_is_original) {
+                self.cwd.close();
+            }
         }
 
         fn sendError(self: *Self, err: ClientError, arg1: u32, arg2: u32) !void {
@@ -101,7 +105,10 @@ fn ServerHandler(comptime T: type) type {
                         };
                         return self.sendError(cerr, 0, 0);
                     };
-                    self.cwd.close();
+                    if (!self.cwd_is_original) {
+                        self.cwd.close();
+                        self.cwd_is_original = false;
+                    }
                     self.cwd = newCwd;
                     return self.send(
                         .{
@@ -114,10 +121,13 @@ fn ServerHandler(comptime T: type) type {
                     const path = self.cwd.realpath(".", &buf) catch unreachable;
                     try self.send(
                         .{
-                            .Pwd = .{},
+                            .Path = .{
+                                .length = @intCast(path.len),
+                            },
                         },
                     );
                     self.stream.writer().writeAll(path) catch unreachable;
+                    return;
                 },
                 else => return self.sendError(
                     ClientError.InvalidMessageType,
@@ -239,6 +249,19 @@ const ServerTester = struct {
     fn send(self: *Self, mes: Message) !void {
         try protocol.writeMessage(mes, self.channel.writer());
     }
+    fn write(self: *Self, data: []const u8) !usize {
+        return self.channel.writer().write(data);
+    }
+    fn read(self: *Self, data: []u8) !usize {
+        return self.channel.reader().read(data);
+    }
+    fn expectPayload(self: *Self, data: []const u8) !void {
+        var reader = self.channel.reader();
+        for (data) |expected| {
+            const actual = try reader.readByte();
+            try std.testing.expectEqual(expected, actual);
+        }
+    }
     fn recv(self: *Self) !Message {
         return try protocol.readMessage(self.channel.reader());
     }
@@ -266,7 +289,39 @@ test "ping" {
     const mesg = try server.recv();
     switch (mesg.header) {
         .PingReply => |hdr| try std.testing.expectEqual(num * 2, hdr.num),
-        else => try std.testing.expectEqual(@intFromEnum(mesg.header), 3),
+        else => unreachable,
     }
+    try server.quit();
+}
+
+test "working directory" {
+    const testdir = "testdir";
+    var server = try ServerTester.init(Config.init(std.testing.allocator));
+    defer server.deinit();
+    try server.send(.{
+        .header = .{
+            .Cd = .{
+                .length = testdir.len,
+            },
+        },
+    });
+    _ = try server.write(testdir);
+    switch ((try server.recv()).header) {
+        .Ok => {},
+        else => unreachable,
+    }
+    try server.send(.{
+        .header = .{
+            .Pwd = .{},
+        },
+    });
+    const len = switch ((try server.recv()).header) {
+        .Path => |hdr| hdr.length,
+        else => unreachable,
+    };
+    var buf = [_]u8{0} ** std.os.PATH_MAX;
+    const read_count: u16 = @intCast(try server.read(buf[0..len]));
+    try std.testing.expectEqual(len, read_count);
+    try std.testing.expectStringEndsWith(buf[0..len], "testdir");
     try server.quit();
 }

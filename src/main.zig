@@ -13,8 +13,10 @@ const ClientErrors = protocol.ClientErrors;
 const ArgParser = configure.ArgParser;
 const Config = configure.Config;
 
+var gpa: std.heap.GeneralPurposeAllocator(.{}) = undefined;
+
 fn loadConfig() !Config {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    gpa = .{};
     var parser = ArgParser.init(std.process.args());
     const args = parser.parse() catch return log.showHelp();
     if (args.help) {
@@ -49,7 +51,7 @@ pub fn main() !void {
         var server = Server.init(conf);
         try server.runServer();
     } else {
-        try runClient(conf);
+        @panic("No client yet\n");
     }
 }
 
