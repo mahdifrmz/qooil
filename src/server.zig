@@ -4,71 +4,139 @@ const configure = @import("configure.zig");
 const protocol = @import("protocol.zig");
 const log = @import("log.zig");
 
+const Header = protocol.Header;
 const Config = configure.Config;
 const Message = protocol.Message;
-const ClientErrors = protocol.ClientErrors;
+const ClientError = protocol.ClientError;
 
 /// Created per client.
 /// File/stream agnostic.
 /// Works on anything that implements reader() & writer().
-const ServerHandler = struct {
-    const Self = @This();
+fn ServerHandler(comptime T: type) type {
+    return struct {
+        const Self = @This();
 
-    isExiting: bool,
-    config: *const Config,
+        isExiting: bool,
+        config: *const Config,
+        cwd: std.fs.Dir,
+        stream: *T,
 
-    fn init(config: *const Config) Self {
-        return .{
-            .isExiting = false,
-            .config = config,
-        };
-    }
-
-    fn handleMessage(self: *Self, mes: Message, stream: anytype) !Message {
-        _ = stream;
-        switch (mes.header) {
-            .Ping => |pl| {
-                var num = std.mem.littleToNative(@TypeOf(pl.num), pl.num);
-                num *= 2;
-                return Message{
-                    .header = .{
-                        .PingReply = .{
-                            .num = num,
-                        },
-                    },
-                };
-            },
-            .Quit => {
-                self.isExiting = true;
-                return Message{
-                    .header = .{
-                        .QuitReply = .{},
-                    },
-                };
-            },
-            else => {
-                return Message{
-                    .header = .{
-                        .Error = .{
-                            .code = @intFromEnum(ClientErrors.InvalidMessageType),
-                            .arg1 = @intFromEnum(mes.header),
-                            .arg2 = 0,
-                        },
-                    },
-                };
-            },
+        fn init(config: *const Config, stream: *T) Self {
+            return .{
+                .isExiting = false,
+                .config = config,
+                .cwd = std.fs.cwd(),
+                .stream = stream,
+            };
         }
-    }
 
-    fn handleClient(self: *Self, stream: anytype) !void {
-        var stream_mut = stream;
-        while (!self.isExiting) {
-            const mes = try protocol.readMessage(stream_mut.reader());
-            const resp = try self.handleMessage(mes, stream_mut);
-            try protocol.writeMessage(resp, stream_mut.writer());
+        fn deinit(self: *Self) void {
+            self.cwd.close();
         }
-    }
-};
+
+        fn sendError(self: *Self, err: ClientError, arg1: u32, arg2: u32) !void {
+            return self.send(
+                .{
+                    .Error = .{
+                        .code = @intFromEnum(err),
+                        .arg1 = arg1,
+                        .arg2 = arg2,
+                    },
+                },
+            );
+        }
+
+        fn send(self: *Self, header: Header) !void {
+            try protocol.writeMessage(.{
+                .header = header,
+            }, self.stream.writer());
+        }
+
+        fn recv(self: *Self) !Message {
+            return protocol.readMessage(self.stream.reader());
+        }
+
+        fn handleMessage(self: *Self, mes: Message) !void {
+            switch (mes.header) {
+                .Ping => |pl| {
+                    var num = std.mem.littleToNative(@TypeOf(pl.num), pl.num);
+                    num *= 2;
+                    return self.send(
+                        .{
+                            .PingReply = .{
+                                .num = num,
+                            },
+                        },
+                    );
+                },
+                .Quit => {
+                    self.isExiting = true;
+                    return self.send(
+                        .{
+                            .QuitReply = .{},
+                        },
+                    );
+                },
+                .Cd => |hdr| {
+                    var buf = [_]u8{0} ** std.os.NAME_MAX;
+                    if (hdr.length > std.os.NAME_MAX)
+                        return self.sendError(ClientError.MaxPathLengthExceeded, hdr.lenght, 0);
+                    const count: usize = try self.stream.reader().readAll(buf[0..hdr.length]);
+                    if (count < hdr.length) {
+                        return self.sendError(
+                            ClientError.UnexpectedEndOfConnection,
+                            0,
+                            0,
+                        );
+                    }
+                    const path = buf[0..count];
+                    const newCwd = self.cwd.openDir(path, .{
+                        .no_follow = true,
+                    }) catch |err| {
+                        const cerr = switch (err) {
+                            error.FileNotFound => ClientError.NonExisting,
+                            error.NotDir => ClientError.IsNotDir,
+                            error.AccessDenied => ClientError.AccessDenied,
+                            else => ClientError.CantOpen,
+                        };
+                        return self.sendError(cerr, 0, 0);
+                    };
+                    self.cwd.close();
+                    self.cwd = newCwd;
+                    return self.send(
+                        .{
+                            .Ok = .{},
+                        },
+                    );
+                },
+                .Pwd => |_| {
+                    var buf = [_]u8{0} ** std.os.PATH_MAX;
+                    const path = self.cwd.realpath(".", &buf) catch unreachable;
+                    try self.send(
+                        .{
+                            .Pwd = .{},
+                        },
+                    );
+                    self.stream.writer().writeAll(path) catch unreachable;
+                },
+                else => return self.sendError(
+                    ClientError.InvalidMessageType,
+                    @intFromEnum(mes.header),
+                    0,
+                ),
+            }
+
+            unreachable;
+        }
+
+        fn handleClient(self: *Self) !void {
+            while (!self.isExiting) {
+                const mes = try self.recv();
+                try self.handleMessage(mes);
+            }
+        }
+    };
+}
 
 pub const Server = struct {
     const Self = @This();
@@ -100,8 +168,9 @@ pub const Server = struct {
             },
         );
         while (stream_server.accept()) |client| {
-            var handler = ServerHandler.init(&self.config);
-            try handler.handleClient(client.stream);
+            var client_mut = client;
+            var handler = ServerHandler(std.net.Stream).init(&self.config, &client_mut.stream);
+            try handler.handleClient();
         } else |_| {
             log.showError("Connection failure", .{});
         }
@@ -151,8 +220,8 @@ const ServerTester = struct {
 
     fn runServer(config: Config, channel: Channel) void {
         var channel_mut = channel;
-        var handler = ServerHandler.init(&config);
-        handler.handleClient(channel_mut) catch {};
+        var handler = ServerHandler(Channel).init(&config, &channel_mut);
+        handler.handleClient() catch {};
         channel_mut.deinit();
     }
 
@@ -185,7 +254,7 @@ const ServerTester = struct {
 
 test "ping" {
     const num: u32 = 4;
-    var server = try ServerTester.init(Config.init());
+    var server = try ServerTester.init(Config.init(std.testing.allocator));
     defer server.deinit();
     try server.send(.{
         .header = .{

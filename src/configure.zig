@@ -154,6 +154,7 @@ pub const Config = struct {
     address: []const u8,
     port: u16,
     is_server: bool,
+    allocator: std.mem.Allocator,
 
     fn parsePort(self: *Self, args: Arguments) !void {
         if (args.port) |p| {
@@ -186,8 +187,9 @@ pub const Config = struct {
         }
     }
 
-    pub fn init() Self {
+    pub fn init(allocator: std.mem.Allocator) Self {
         return .{
+            .allocator = allocator,
             .is_server = false,
             .address = "0.0.0.0",
             .port = DEFAULT_PORT,

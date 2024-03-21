@@ -1,10 +1,25 @@
 const std = @import("std");
 
 const TagType = u16;
-pub const ClientErrors = enum(u16) { InvalidMessageType };
+pub const ClientError = enum(u16) {
+    InvalidMessageType,
+    MaxPathLengthExceeded,
+    UnexpectedEndOfConnection,
+    NonExisting,
+    IsNotFile,
+    IsNotDir,
+    AccessDenied,
+    CantOpen,
+};
 
 pub const Header = union(enum(TagType)) {
     const Self = @This();
+
+    Cd: packed struct { length: u8 },
+    Pwd: packed struct {},
+
+    Path: packed struct { length: u8 },
+    Ok: packed struct {},
 
     None: packed struct {},
     Ping: packed struct { num: u32 },

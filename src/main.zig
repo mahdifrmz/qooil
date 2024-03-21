@@ -14,18 +14,23 @@ const ArgParser = configure.ArgParser;
 const Config = configure.Config;
 
 fn loadConfig() !Config {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var parser = ArgParser.init(std.process.args());
     const args = parser.parse() catch return log.showHelp();
     if (args.help) {
         return log.showHelp();
     }
-    var conf = Config.init();
+    var conf = Config.init(gpa.allocator());
     try conf.parseCLI(args);
     return conf;
 }
 
-fn runClient(config: Config, allocator: std.mem.Allocator) !void {
-    var stream = try net.tcpConnectToHost(allocator, config.address, config.port);
+fn runClient(config: Config) !void {
+    var stream = try net.tcpConnectToHost(
+        config.allocator,
+        config.address,
+        config.port,
+    );
     const mes = Message{
         .header = .{
             .Ping = .{
@@ -39,14 +44,12 @@ fn runClient(config: Config, allocator: std.mem.Allocator) !void {
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var allocator = gpa.allocator();
     const conf = try loadConfig();
     if (conf.is_server) {
         var server = Server.init(conf);
         try server.runServer();
     } else {
-        try runClient(conf, allocator);
+        try runClient(conf);
     }
 }
 
