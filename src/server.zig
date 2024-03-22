@@ -64,7 +64,7 @@ fn ServerHandler(comptime T: type) type {
         fn recv(self: *Self) !Message {
             return protocol.readMessage(self.stream.reader());
         }
-        fn openDir(self: *Self, path: []const u8, dir_depth: *usize) !std.fs.Dir {
+        fn openDir(self: *Self, path: []const u8, dir_depth: ?*usize) !std.fs.Dir {
             var iter = std.mem.splitScalar(u8, path, '/');
             var depth = self.depth;
             var cwd = blk: {
@@ -106,7 +106,9 @@ fn ServerHandler(comptime T: type) type {
                 cwd = new_cwd;
             }
 
-            dir_depth.* = depth;
+            if (dir_depth) |dd| {
+                dd.* = depth;
+            }
             return cwd;
         }
         fn readPath(self: *Self, length: u8, buffer: []u8) ![]u8 {
@@ -183,8 +185,10 @@ fn ServerHandler(comptime T: type) type {
                     var buf = [_]u8{0} ** std.os.NAME_MAX;
                     const path = try self.readPath(hdr.length, buf[0..]);
                     var depth: usize = 0;
-                    const dir = try self.openDir(path, &depth);
-                    const iterable = try dir.openIterableDir(".", .{});
+                    var dir = try self.openDir(path, &depth);
+                    defer dir.close();
+                    var iterable = try dir.openIterableDir(".", .{});
+                    defer iterable.close();
                     var iter = iterable.iterate();
                     while (try iter.next()) |entry| {
                         switch (entry.kind) {
@@ -203,6 +207,52 @@ fn ServerHandler(comptime T: type) type {
                         }
                     }
                     try self.endOfList();
+                },
+                .Read => |hdr| {
+                    var buf = [_]u8{0} ** @max(std.os.NAME_MAX, 0x1000);
+                    const path = try self.readPath(hdr.length, buf[0..]);
+                    var dir = if (std.fs.path.dirname(path)) |dir_path|
+                        try self.openDir(dir_path, null)
+                    else
+                        try self.cwd.openDir(".", .{});
+
+                    defer dir.close();
+                    const file_name = std.fs.path.basename(path);
+                    if (file_name.len == 0) {
+                        try self.sendError(ClientError.IsNotFile, 0, 0);
+                        return error.Client;
+                    }
+                    const file = dir.openFile(file_name, .{}) catch |err| {
+                        switch (err) {
+                            error.FileNotFound => {
+                                try self.sendError(ClientError.NonExisting, 0, 0);
+                                return error.Client;
+                            },
+                            error.AccessDenied => {
+                                try self.sendError(ClientError.AccessDenied, 0, 0);
+                                return error.Client;
+                            },
+                            else => {
+                                return err;
+                            },
+                        }
+                    };
+                    defer file.close();
+                    const file_stat = try file.stat();
+                    try self.send(
+                        .{
+                            .File = .{
+                                .size = file_stat.size,
+                            },
+                        },
+                    );
+                    while (true) {
+                        const count = try file.readAll(buf[0..]);
+                        try self.write(buf[0..count]);
+                        if (count < buf.len) {
+                            break;
+                        }
+                    }
                 },
                 .Corrupt => |hdr| try self.sendError(
                     ClientError.CorruptMessageTag,
@@ -370,6 +420,18 @@ const ServerTester = struct {
         );
         _ = try self.write(path);
     }
+    fn sendRead(self: *Self, path: []const u8) !void {
+        try self.send(
+            .{
+                .header = .{
+                    .Read = .{
+                        .length = @intCast(path.len),
+                    },
+                },
+            },
+        );
+        _ = try self.write(path);
+    }
     fn sendList(self: *Self, path: []const u8) !void {
         try self.send(
             .{
@@ -413,6 +475,16 @@ const ServerTester = struct {
                 .Entry = .{
                     .is_dir = is_dir,
                     .length = length,
+                },
+            },
+            (try self.recv()).header,
+        );
+    }
+    fn expectFile(self: *Self, size: u64) !void {
+        try std.testing.expectEqual(
+            Header{
+                .File = .{
+                    .size = size,
                 },
             },
             (try self.recv()).header,
@@ -594,6 +666,25 @@ test "list of files" {
         }
     }
     try server.expectEnd();
+
+    try server.quit();
+}
+
+test "read file" {
+    const allocator = std.testing.allocator;
+    const temp_dir = try makeTestDir();
+    const file_name = "test-file";
+    const file_content = "some data";
+    defer removeTestDir(temp_dir);
+    try makeTestFile(temp_dir, file_name, file_content);
+    var server = try ServerTester.init(Config.init(allocator));
+    defer server.deinit();
+    const file_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ temp_dir, file_name });
+    defer allocator.free(file_path);
+
+    _ = try server.sendRead(file_path);
+    try server.expectFile(file_content.len);
+    try server.expectPayload(file_content);
 
     try server.quit();
 }

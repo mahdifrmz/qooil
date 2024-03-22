@@ -15,6 +15,7 @@ pub const ClientError = enum(u16) {
 
 pub const Header = union(enum(TagType)) {
     Read: packed struct { length: u8 },
+    File: packed struct { size: u64 },
     List: packed struct { length: u8 },
     Entry: packed struct {
         length: u8,

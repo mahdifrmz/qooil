@@ -1,7 +1,6 @@
 ### Bugs
 
 ### Features
-* download files
 * upload file
 * remove file
 * directory manipulation
@@ -12,8 +11,11 @@
 * proxy
 * authentication
 * per-dir/file permissions
+* compression
 * encryption
 
 ### Refactors
+* using component iterator
+* break `handleMessage`
 
 ### Test
