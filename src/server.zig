@@ -9,6 +9,10 @@ const Config = configure.Config;
 const Message = protocol.Message;
 const ClientError = protocol.ClientError;
 
+const Errors = error{
+    Client,
+};
+
 /// Created per client.
 /// File/stream agnostic.
 /// Works on anything that implements reader() & writer().
@@ -40,7 +44,7 @@ fn ServerHandler(comptime T: type) type {
         }
 
         fn sendError(self: *Self, err: ClientError, arg1: u32, arg2: u32) !void {
-            return self.send(
+            try self.send(
                 .{
                     .Error = .{
                         .code = @intFromEnum(err),
@@ -60,7 +64,7 @@ fn ServerHandler(comptime T: type) type {
         fn recv(self: *Self) !Message {
             return protocol.readMessage(self.stream.reader());
         }
-        fn changeCwd(self: *Self, path: []const u8) !void {
+        fn openDir(self: *Self, path: []const u8, dir_depth: *usize) !std.fs.Dir {
             var iter = std.mem.splitScalar(u8, path, '/');
             var depth = self.depth;
             var cwd = try self.cwd.openDir(".", .{});
@@ -86,24 +90,33 @@ fn ServerHandler(comptime T: type) type {
                         else => ClientError.CantOpen,
                     };
                     cwd.close();
-                    return self.sendError(cerr, 0, 0);
+                    try self.sendError(cerr, 0, 0);
+                    return error.Client;
                 };
                 cwd.close();
                 cwd = new_cwd;
             }
-            self.cwd.close();
-            self.cwd = cwd;
-            self.depth = depth;
-            try self.send(
-                .{
-                    .Ok = .{},
-                },
-            );
+
+            dir_depth.* = depth;
+            return cwd;
+        }
+        fn readPath(self: *Self, length: u8, buffer: []u8) ![]u8 {
+            if (length > std.os.NAME_MAX)
+                try self.sendError(ClientError.MaxPathLengthExceeded, length, 0);
+            const count: usize = try self.stream.reader().readAll(buffer[0..length]);
+            if (count < length) {
+                try self.sendError(
+                    ClientError.UnexpectedEndOfConnection,
+                    0,
+                    0,
+                );
+            }
+            return buffer[0..count];
         }
         fn handleMessage(self: *Self, mes: Message) !void {
             switch (mes.header) {
                 .Ping => {
-                    return self.send(
+                    try self.send(
                         .{
                             .PingReply = .{},
                         },
@@ -111,7 +124,7 @@ fn ServerHandler(comptime T: type) type {
                 },
                 .Quit => {
                     self.isExiting = true;
-                    return self.send(
+                    try self.send(
                         .{
                             .QuitReply = .{},
                         },
@@ -119,18 +132,17 @@ fn ServerHandler(comptime T: type) type {
                 },
                 .Cd => |hdr| {
                     var buf = [_]u8{0} ** std.os.NAME_MAX;
-                    if (hdr.length > std.os.NAME_MAX)
-                        return self.sendError(ClientError.MaxPathLengthExceeded, hdr.lenght, 0);
-                    const count: usize = try self.stream.reader().readAll(buf[0..hdr.length]);
-                    if (count < hdr.length) {
-                        return self.sendError(
-                            ClientError.UnexpectedEndOfConnection,
-                            0,
-                            0,
-                        );
-                    }
-                    const path = buf[0..count];
-                    return try self.changeCwd(path);
+                    const path = try self.readPath(hdr.length, buf[0..]);
+                    var depth: usize = 0;
+                    const dir = try self.openDir(path, &depth);
+                    self.cwd.close();
+                    self.cwd = dir;
+                    self.depth = depth;
+                    try self.send(
+                        .{
+                            .Ok = .{},
+                        },
+                    );
                 },
                 .Pwd => |_| {
                     var buf = [_]u8{0} ** std.os.PATH_MAX;
@@ -147,14 +159,13 @@ fn ServerHandler(comptime T: type) type {
                     if (path.len == root_path.len)
                         try self.stream.writer().writeAll("/");
                     try self.stream.writer().writeAll(path[root_path.len..]);
-                    return;
                 },
-                .Corrupt => |hdr| return self.sendError(
+                .Corrupt => |hdr| try self.sendError(
                     ClientError.CorruptMessageTag,
                     hdr.tag,
                     0,
                 ),
-                else => return self.sendError(
+                else => try self.sendError(
                     ClientError.InvalidMessageType,
                     @intFromEnum(mes.header),
                     0,
@@ -165,7 +176,12 @@ fn ServerHandler(comptime T: type) type {
         fn handleClient(self: *Self) !void {
             while (!self.isExiting) {
                 const mes = try self.recv();
-                try self.handleMessage(mes);
+                self.handleMessage(mes) catch |err| {
+                    switch (err) {
+                        error.Client => {},
+                        else => return err,
+                    }
+                };
             }
         }
     };
