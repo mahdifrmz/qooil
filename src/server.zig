@@ -122,6 +122,16 @@ fn ServerHandler(comptime T: type) type {
             }
             return buffer[0..count];
         }
+        fn write(self: *Self, buffer: []const u8) !void {
+            try self.stream.writer().writeAll(buffer);
+        }
+        fn endOfList(self: *Self) !void {
+            try self.send(
+                .{
+                    .End = .{},
+                },
+            );
+        }
         fn handleMessage(self: *Self, mes: Message) !void {
             switch (mes.header) {
                 .Ping => {
@@ -166,8 +176,33 @@ fn ServerHandler(comptime T: type) type {
                         },
                     );
                     if (path.len == root_path.len)
-                        try self.stream.writer().writeAll("/");
-                    try self.stream.writer().writeAll(path[root_path.len..]);
+                        try self.write("/");
+                    try self.write(path[root_path.len..]);
+                },
+                .List => |hdr| {
+                    var buf = [_]u8{0} ** std.os.NAME_MAX;
+                    const path = try self.readPath(hdr.length, buf[0..]);
+                    var depth: usize = 0;
+                    const dir = try self.openDir(path, &depth);
+                    const iterable = try dir.openIterableDir(".", .{});
+                    var iter = iterable.iterate();
+                    while (try iter.next()) |entry| {
+                        switch (entry.kind) {
+                            .file, .directory => {
+                                try self.send(
+                                    .{
+                                        .Entry = .{
+                                            .length = @intCast(entry.name.len),
+                                            .is_dir = entry.kind == std.fs.File.Kind.directory,
+                                        },
+                                    },
+                                );
+                                try self.write(entry.name);
+                            },
+                            else => continue,
+                        }
+                    }
+                    try self.endOfList();
                 },
                 .Corrupt => |hdr| try self.sendError(
                     ClientError.CorruptMessageTag,
@@ -335,6 +370,18 @@ const ServerTester = struct {
         );
         _ = try self.write(path);
     }
+    fn sendList(self: *Self, path: []const u8) !void {
+        try self.send(
+            .{
+                .header = .{
+                    .List = .{
+                        .length = @intCast(path.len),
+                    },
+                },
+            },
+        );
+        _ = try self.write(path);
+    }
     fn sendPwd(self: *Self) !void {
         try self.send(
             .{
@@ -348,6 +395,25 @@ const ServerTester = struct {
         try std.testing.expectEqual(
             Header{
                 .Ok = .{},
+            },
+            (try self.recv()).header,
+        );
+    }
+    fn expectEnd(self: *Self) !void {
+        try std.testing.expectEqual(
+            Header{
+                .End = .{},
+            },
+            (try self.recv()).header,
+        );
+    }
+    fn expectEntry(self: *Self, length: u8, is_dir: bool) !void {
+        try std.testing.expectEqual(
+            Header{
+                .Entry = .{
+                    .is_dir = is_dir,
+                    .length = length,
+                },
             },
             (try self.recv()).header,
         );
@@ -389,8 +455,14 @@ fn makeTestDir() ![]u8 {
     return path;
 }
 
+fn makeTestFile(dir_path: []const u8, file_path: []const u8, content: []const u8) !void {
+    const dir = try std.fs.cwd().openDir(dir_path, .{});
+    const file = try dir.createFile(file_path, .{});
+    _ = try file.write(content);
+}
+
 fn removeTestDir(name: []const u8) void {
-    std.fs.cwd().deleteDir(name) catch {};
+    std.fs.cwd().deleteTree(name) catch {};
     std.testing.allocator.free(name);
 }
 
@@ -484,4 +556,44 @@ test "corrupt tag" {
         corrupt_tag,
         0,
     );
+}
+
+test "list of files" {
+    const allocator = std.testing.allocator;
+    const temp_dir = try makeTestDir();
+    defer removeTestDir(temp_dir);
+    var files = [_]struct {
+        path: []const u8,
+        recieved: bool,
+    }{
+        .{ .path = "file1", .recieved = false },
+        .{ .path = "file2", .recieved = false },
+        .{ .path = "file3", .recieved = false },
+    };
+    for (files) |file| {
+        try makeTestFile(temp_dir, file.path, "");
+    }
+    var server = try ServerTester.init(Config.init(allocator));
+    defer server.deinit();
+
+    try server.sendList(temp_dir);
+    for (0..files.len) |_| {
+        try server.expectEntry(@intCast(files[0].path.len), false);
+        try server.expectPayload("file");
+        var charBuf = [1]u8{0};
+        _ = try server.read(charBuf[0..]);
+        const idx = charBuf[0] - '1';
+        if (files[idx].recieved) {
+            unreachable;
+        }
+        files[idx].recieved = true;
+    }
+    for (files) |file| {
+        if (!file.recieved) {
+            unreachable;
+        }
+    }
+    try server.expectEnd();
+
+    try server.quit();
 }
