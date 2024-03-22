@@ -7,7 +7,7 @@ const log = @import("log.zig");
 const Header = protocol.Header;
 const Config = configure.Config;
 const Message = protocol.Message;
-const ClientError = protocol.ClientError;
+const ServerError = protocol.ServerError;
 
 const Errors = error{
     Client,
@@ -43,16 +43,17 @@ fn ServerHandler(comptime T: type) type {
             self.cwd.close();
         }
 
-        fn sendError(self: *Self, err: ClientError, arg1: u32, arg2: u32) !void {
+        fn sendError(self: *Self, err: ServerError, arg1: u32, arg2: u32) !void {
             try self.send(
                 .{
                     .Error = .{
-                        .code = @intFromEnum(err),
+                        .code = protocol.getServerErrorCode(err),
                         .arg1 = arg1,
                         .arg2 = arg2,
                     },
                 },
             );
+            return err;
         }
 
         fn send(self: *Self, header: Header) !void {
@@ -93,10 +94,10 @@ fn ServerHandler(comptime T: type) type {
                     .no_follow = true,
                 }) catch |err| {
                     const cerr = switch (err) {
-                        error.FileNotFound => ClientError.NonExisting,
-                        error.NotDir => ClientError.IsNotDir,
-                        error.AccessDenied => ClientError.AccessDenied,
-                        else => ClientError.CantOpen,
+                        error.FileNotFound => ServerError.NonExisting,
+                        error.NotDir => ServerError.IsNotDir,
+                        error.AccessDenied => ServerError.AccessDenied,
+                        else => ServerError.CantOpen,
                     };
                     cwd.close();
                     try self.sendError(cerr, 0, 0);
@@ -113,11 +114,11 @@ fn ServerHandler(comptime T: type) type {
         }
         fn readPath(self: *Self, length: u8, buffer: []u8) ![]u8 {
             if (length > std.os.NAME_MAX)
-                try self.sendError(ClientError.MaxPathLengthExceeded, length, 0);
+                try self.sendError(ServerError.MaxPathLengthExceeded, length, 0);
             const count: usize = try self.stream.reader().readAll(buffer[0..length]);
             if (count < length) {
                 try self.sendError(
-                    ClientError.UnexpectedEndOfConnection,
+                    ServerError.UnexpectedEndOfConnection,
                     0,
                     0,
                 );
@@ -219,17 +220,17 @@ fn ServerHandler(comptime T: type) type {
                     defer dir.close();
                     const file_name = std.fs.path.basename(path);
                     if (file_name.len == 0) {
-                        try self.sendError(ClientError.IsNotFile, 0, 0);
+                        try self.sendError(ServerError.IsNotFile, 0, 0);
                         return error.Client;
                     }
                     const file = dir.openFile(file_name, .{}) catch |err| {
                         switch (err) {
                             error.FileNotFound => {
-                                try self.sendError(ClientError.NonExisting, 0, 0);
+                                try self.sendError(ServerError.NonExisting, 0, 0);
                                 return error.Client;
                             },
                             error.AccessDenied => {
-                                try self.sendError(ClientError.AccessDenied, 0, 0);
+                                try self.sendError(ServerError.AccessDenied, 0, 0);
                                 return error.Client;
                             },
                             else => {
@@ -255,12 +256,12 @@ fn ServerHandler(comptime T: type) type {
                     }
                 },
                 .Corrupt => |hdr| try self.sendError(
-                    ClientError.CorruptMessageTag,
+                    ServerError.CorruptMessageTag,
                     hdr.tag,
                     0,
                 ),
                 else => try self.sendError(
-                    ClientError.InvalidMessageType,
+                    ServerError.InvalidMessageType,
                     @intFromEnum(mes.header),
                     0,
                 ),
@@ -270,12 +271,7 @@ fn ServerHandler(comptime T: type) type {
         fn handleClient(self: *Self) !void {
             while (!self.isExiting) {
                 const mes = try self.recv();
-                self.handleMessage(mes) catch |err| {
-                    switch (err) {
-                        error.Client => {},
-                        else => return err,
-                    }
-                };
+                self.handleMessage(mes) catch {};
             }
         }
     };
@@ -490,11 +486,11 @@ const ServerTester = struct {
             (try self.recv()).header,
         );
     }
-    fn expectError(self: *Self, code: ClientError, arg1: u32, arg2: u32) !void {
+    fn expectError(self: *Self, code: ServerError, arg1: u32, arg2: u32) !void {
         try std.testing.expectEqual(
             Header{
                 .Error = .{
-                    .code = @intFromEnum(code),
+                    .code = protocol.getServerErrorCode(code),
                     .arg1 = arg1,
                     .arg2 = arg2,
                 },
@@ -577,7 +573,7 @@ test "working directory" {
     try server.expectPayload("/");
 
     try server.sendCd(testdir ++ "/non-existing");
-    try server.expectError(ClientError.NonExisting, 0, 0);
+    try server.expectError(ServerError.NonExisting, 0, 0);
 
     try server.sendPwd();
     try server.expectPath(1);
@@ -607,7 +603,7 @@ test "invalid commands" {
         },
     );
     try server.expectError(
-        ClientError.InvalidMessageType,
+        ServerError.InvalidMessageType,
         @intFromEnum(
             Header{
                 .Ok = .{},
@@ -624,7 +620,7 @@ test "corrupt tag" {
     const corrupt_tag = std.mem.nativeToLittle(u16, 0xeeee);
     _ = try server.write(std.mem.asBytes(&corrupt_tag));
     try server.expectError(
-        ClientError.CorruptMessageTag,
+        ServerError.CorruptMessageTag,
         corrupt_tag,
         0,
     );

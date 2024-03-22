@@ -1,7 +1,6 @@
 const std = @import("std");
 
-const TagType = u16;
-pub const ClientError = enum(u16) {
+pub const ServerError = error{
     InvalidMessageType,
     CorruptMessageTag,
     MaxPathLengthExceeded,
@@ -12,6 +11,22 @@ pub const ClientError = enum(u16) {
     AccessDenied,
     CantOpen,
 };
+
+pub fn getServerErrorCode(err: ServerError) u16 {
+    return switch (err) {
+        error.InvalidMessageType => 1,
+        error.CorruptMessageTag => 2,
+        error.MaxPathLengthExceeded => 3,
+        error.UnexpectedEndOfConnection => 4,
+        error.NonExisting => 5,
+        error.IsNotFile => 6,
+        error.IsNotDir => 7,
+        error.AccessDenied => 8,
+        error.CantOpen => 9,
+    };
+}
+
+const TagType = u16;
 
 pub const Header = union(enum(TagType)) {
     Read: packed struct { length: u8 },

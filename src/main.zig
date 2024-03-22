@@ -9,7 +9,7 @@ const server_mod = @import("server.zig");
 const Server = server_mod.Server;
 const Message = protocol.Message;
 const Header = protocol.Header;
-const ClientErrors = protocol.ClientErrors;
+const ServerErrors = protocol.ServerErrors;
 const ArgParser = configure.ArgParser;
 const Config = configure.Config;
 
@@ -25,24 +25,6 @@ fn loadConfig() !Config {
     var conf = Config.init(gpa.allocator());
     try conf.parseCLI(args);
     return conf;
-}
-
-fn runClient(config: Config) !void {
-    var stream = try net.tcpConnectToHost(
-        config.allocator,
-        config.address,
-        config.port,
-    );
-    const mes = Message{
-        .header = .{
-            .Ping = .{
-                .num = 7,
-            },
-        },
-    };
-    try protocol.writeMessage(mes, stream.writer());
-    const resp = try protocol.readMessage(stream.reader());
-    log.showLog("Server response: {d}\n", .{resp.header.PingReply.num});
 }
 
 pub fn main() !void {
