@@ -67,8 +67,17 @@ fn ServerHandler(comptime T: type) type {
         fn openDir(self: *Self, path: []const u8, dir_depth: *usize) !std.fs.Dir {
             var iter = std.mem.splitScalar(u8, path, '/');
             var depth = self.depth;
-            var cwd = try self.cwd.openDir(".", .{});
+            var cwd = blk: {
+                if (path.len > 0 and path[0] == '/') {
+                    depth = 0;
+                    break :blk try self.cwd_original.openDir(".", .{});
+                } else {
+                    break :blk try self.cwd.openDir(".", .{});
+                }
+            };
             while (iter.next()) |seg| {
+                if (seg.len == 0)
+                    continue;
                 const is_dotdot = std.mem.eql(u8, seg, "..");
                 if (is_dotdot) {
                     if (depth > 0) {
@@ -425,6 +434,15 @@ test "working directory" {
 
     try server.sendCd(testdir ++ "/non-existing");
     try server.expectError(ClientError.NonExisting, 0, 0);
+
+    try server.sendPwd();
+    try server.expectPath(1);
+    try server.expectPayload("/");
+
+    try server.sendCd(temp_dir);
+    try server.expectOk();
+    try server.sendCd("/");
+    try server.expectOk();
 
     try server.sendPwd();
     try server.expectPath(1);
