@@ -1,6 +1,7 @@
 ### Bugs
 
 ### Features
+* server should provide max length of paths
 * upload file
 * remove file
 * directory manipulation

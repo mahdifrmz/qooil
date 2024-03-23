@@ -5,8 +5,10 @@ const protocol = @import("protocol.zig");
 const configure = @import("configure.zig");
 const log = @import("log.zig");
 const server_mod = @import("server.zig");
+const client_mod = @import("client.zig");
 
 const Server = server_mod.Server;
+const Client = client_mod.Client;
 const Message = protocol.Message;
 const Header = protocol.Header;
 const ServerErrors = protocol.ServerErrors;
@@ -33,7 +35,10 @@ pub fn main() !void {
         var server = Server.init(conf);
         try server.runServer();
     } else {
-        @panic("No client yet\n");
+        var client = Client.init();
+        try client.connect(conf.address, conf.port, conf.allocator);
+        try client.ping();
+        try client.close();
     }
 }
 

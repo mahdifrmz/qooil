@@ -47,7 +47,7 @@ fn ServerHandler(comptime T: type) type {
             try self.send(
                 .{
                     .Error = .{
-                        .code = protocol.getServerErrorCode(err),
+                        .code = protocol.encodeServerError(err),
                         .arg1 = arg1,
                         .arg2 = arg2,
                     },
@@ -188,6 +188,9 @@ fn ServerHandler(comptime T: type) type {
                     var depth: usize = 0;
                     var dir = try self.openDir(path, &depth);
                     defer dir.close();
+                    try self.send(.{
+                        .Ok = .{},
+                    });
                     var iterable = try dir.openIterableDir(".", .{});
                     defer iterable.close();
                     var iter = iterable.iterate();
@@ -490,7 +493,7 @@ const ServerTester = struct {
         try std.testing.expectEqual(
             Header{
                 .Error = .{
-                    .code = protocol.getServerErrorCode(code),
+                    .code = protocol.encodeServerError(code),
                     .arg1 = arg1,
                     .arg2 = arg2,
                 },
@@ -645,6 +648,7 @@ test "list of files" {
     defer server.deinit();
 
     try server.sendList(temp_dir);
+    try server.expectOk();
     for (0..files.len) |_| {
         try server.expectEntry(@intCast(files[0].path.len), false);
         try server.expectPayload("file");

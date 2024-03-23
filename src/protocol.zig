@@ -10,9 +10,11 @@ pub const ServerError = error{
     IsNotDir,
     AccessDenied,
     CantOpen,
+
+    Unrecognized,
 };
 
-pub fn getServerErrorCode(err: ServerError) u16 {
+pub fn encodeServerError(err: ServerError) u16 {
     return switch (err) {
         error.InvalidMessageType => 1,
         error.CorruptMessageTag => 2,
@@ -23,6 +25,22 @@ pub fn getServerErrorCode(err: ServerError) u16 {
         error.IsNotDir => 7,
         error.AccessDenied => 8,
         error.CantOpen => 9,
+        error.Unrecognized => 0xffff,
+    };
+}
+
+pub fn decodeServerError(code: u16) ServerError {
+    return switch (code) {
+        1 => error.InvalidMessageType,
+        2 => error.CorruptMessageTag,
+        3 => error.MaxPathLengthExceeded,
+        4 => error.UnexpectedEndOfConnection,
+        5 => error.NonExisting,
+        6 => error.IsNotFile,
+        7 => error.IsNotDir,
+        8 => error.AccessDenied,
+        9 => error.CantOpen,
+        else => error.Unrecognized,
     };
 }
 
