@@ -312,7 +312,7 @@ pub const Server = struct {
         while (stream_server.accept()) |client| {
             var client_mut = client;
             var handler = ServerHandler(std.net.Stream).init(&self.config, &client_mut.stream);
-            try handler.handleClient();
+            handler.handleClient() catch {};
         } else |_| {
             log.showError("Connection failure", .{});
         }

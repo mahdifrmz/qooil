@@ -66,7 +66,7 @@ pub const Client = struct {
             return self.stream.?.readAll(buffer[0..length]);
         }
     }
-    fn writeBuffer(self: *Self, buffer: []const u8) !usize {
+    fn writeBuffer(self: *Self, buffer: []const u8) !void {
         return self.stream.?.writer().writeAll(buffer);
     }
 
@@ -104,7 +104,7 @@ pub const Client = struct {
         try self.send(
             .{
                 .Cd = .{
-                    .length = path.len,
+                    .length = @intCast(path.len),
                 },
             },
         );
@@ -176,7 +176,7 @@ pub const Client = struct {
         try self.checkConnected();
         try self.send(.{
             .List = .{
-                .length = path.len,
+                .length = @intCast(path.len),
             },
         });
         _ = try self.writeBuffer(path);
