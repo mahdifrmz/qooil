@@ -211,6 +211,15 @@ test "read file" {
 
     var client = Client(Channel).init();
     try client.connect(server.channel);
+    _ = client.getFile(
+        temp_dir,
+        buf_stream.writer(),
+    ) catch |err| {
+        switch (err) {
+            error.IsNotFile => {},
+            else => unreachable,
+        }
+    };
     const size = try client.getFile(
         file_path,
         buf_stream.writer(),

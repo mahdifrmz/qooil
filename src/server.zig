@@ -227,7 +227,16 @@ pub fn ServerHandler(comptime T: type) type {
                 try self.sendError(ServerError.IsNotFile, 0, 0);
                 return error.Client;
             }
+            const file_stat = try dir.statFile(file_name);
+            switch (file_stat.kind) {
+                .file => {},
+                else => {
+                    try self.sendError(ServerError.IsNotFile, 0, 0);
+                    return error.Client;
+                },
+            }
             const file = dir.openFile(file_name, .{}) catch |err| {
+                // std.debug.print("file={s}\n", .{file_name});
                 switch (err) {
                     error.FileNotFound => {
                         try self.sendError(ServerError.NonExisting, 0, 0);
@@ -243,7 +252,6 @@ pub fn ServerHandler(comptime T: type) type {
                 }
             };
             defer file.close();
-            const file_stat = try file.stat();
             try self.send(
                 .{
                     .File = .{
