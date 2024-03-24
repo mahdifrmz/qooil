@@ -1,6 +1,5 @@
 ### Bugs
 * `Client.readEntry` does not return exact length
-* `zig build test` does not run all test.zig tests
 * repl `ls` command is leaking memory
 
 ### Features
@@ -24,6 +23,5 @@
 
 ### Refactors
 * using component iterator
-* break `handleMessage`
 
 ### Test
