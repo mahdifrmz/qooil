@@ -71,6 +71,8 @@ fn exec(self: *Self) !bool {
     } else if (std.mem.eql(u8, command, "ping")) {
         try self.client.ping();
         println("the server is up");
+    } else if (std.mem.eql(u8, command, "cat")) {
+        _ = try self.client.getFile(try self.next(), std.io.getStdOut().writer());
     } else if (std.mem.eql(u8, command, "ls")) {
         try self.client.getEntries(self.next() catch ".");
         var buf = [_]u8{0} ** 256;
