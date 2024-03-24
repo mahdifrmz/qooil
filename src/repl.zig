@@ -1,4 +1,5 @@
 const std = @import("std");
+const net = std.net;
 const configure = @import("configure.zig");
 const client_mod = @import("client.zig");
 
@@ -14,7 +15,7 @@ const CliError = error{
 const Self = @This();
 
 config: Config,
-client: Client,
+client: Client(net.Stream),
 params: std.ArrayList([]const u8),
 is_exiting: bool,
 
@@ -99,8 +100,9 @@ fn runloop(self: *Self) !bool {
 }
 
 pub fn mainloop(self: *Self, config: Config) !void {
-    self.client = Client.init();
-    try self.client.connect(config.address, config.port, config.allocator);
+    self.client = Client(net.Stream).init();
+    const stream = try net.tcpConnectToHost(config.allocator, config.address, config.port);
+    try self.client.connect(stream);
     while (true) {
         const will_exit = self.runloop() catch |err| {
             const error_text = switch (err) {
@@ -122,6 +124,7 @@ pub fn mainloop(self: *Self, config: Config) !void {
         }
     }
     try self.client.close();
+    stream.close();
 }
 
 pub fn init(config: Config) Self {
