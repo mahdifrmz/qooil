@@ -62,9 +62,9 @@ pub fn Client(comptime T: type) type {
         }
         fn readToBuffer(self: *Self, buffer: []u8, length: usize) !usize {
             if (length > buffer.len) {
-                return self.stream.?.readAll(buffer);
+                return self.stream.?.reader().readAll(buffer);
             } else {
-                return self.stream.?.readAll(buffer[0..length]);
+                return self.stream.?.reader().readAll(buffer[0..length]);
             }
         }
         fn writeBuffer(self: *Self, buffer: []const u8) !void {
@@ -148,12 +148,12 @@ pub fn Client(comptime T: type) type {
                 else => return error.Protocol,
             }
         }
-        pub fn getFile(self: *Self, path: []const u8, writer: anytype) !void {
+        pub fn getFile(self: *Self, path: []const u8, writer: anytype) !usize {
             try self.checkConnected();
             try self.send(
                 .{
                     .Read = .{
-                        .length = path.len,
+                        .length = @intCast(path.len),
                     },
                 },
             );
@@ -162,13 +162,17 @@ pub fn Client(comptime T: type) type {
             switch (resp) {
                 .File => |hdr| {
                     var buf = [_]u8{0} ** 1024;
-                    while (true) {
-                        const count = try self.readToBuffer(buf, hdr.length);
-                        _ = try writer.writeAll(buf);
-                        if (count < buf.len) {
-                            break;
+                    var rem = hdr.size;
+                    while (rem > 0) {
+                        const expected = @min(rem, buf.len);
+                        const count = try self.readToBuffer(buf[0..expected], expected);
+                        _ = try writer.writeAll(buf[0..count]);
+                        if (count != expected) {
+                            return error.Protocol;
                         }
+                        rem -= expected;
                     }
+                    return hdr.size;
                 },
                 else => return error.Protocol,
             }

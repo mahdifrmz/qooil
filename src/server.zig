@@ -697,3 +697,30 @@ test "read file" {
 
     try server.quit();
 }
+
+const client_mod = @import("client.zig");
+
+test "client read file" {
+    const allocator = std.testing.allocator;
+    const temp_dir = try makeTestDir();
+    defer removeTestDir(temp_dir);
+    const file_name = "test-file";
+    const file_content: []const u8 = "some data";
+    const file_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ temp_dir, file_name });
+    defer allocator.free(file_path);
+    try makeTestFile(temp_dir, file_name, file_content);
+
+    var server = try ServerTester.init(Config.init(allocator));
+    defer server.deinit();
+    var buf = [_]u8{0} ** 64;
+    var buf_stream = std.io.fixedBufferStream(buf[0..]);
+
+    var client = client_mod.Client(Channel).init();
+    try client.connect(server.channel);
+    const size = try client.getFile(
+        file_path,
+        buf_stream.writer(),
+    );
+    try client.close();
+    try std.testing.expectEqualSlices(u8, "some data", buf[0..size]);
+}
