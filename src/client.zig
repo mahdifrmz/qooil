@@ -2,7 +2,7 @@ const std = @import("std");
 const protocol = @import("protocol.zig");
 const net = std.net;
 const Header = protocol.Header;
-const ServerError = protocol.ServerError;
+pub const ServerError = protocol.ServerError;
 
 pub const Error = error{
     Protocol,

@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub const ServerError = error{
-    InvalidMessageType,
+    UnexpectedMessage,
     CorruptMessageTag,
     MaxPathLengthExceeded,
     UnexpectedEndOfConnection,
@@ -16,7 +16,7 @@ pub const ServerError = error{
 
 pub fn encodeServerError(err: ServerError) u16 {
     return switch (err) {
-        error.InvalidMessageType => 1,
+        error.UnexpectedMessage => 1,
         error.CorruptMessageTag => 2,
         error.MaxPathLengthExceeded => 3,
         error.UnexpectedEndOfConnection => 4,
@@ -31,7 +31,7 @@ pub fn encodeServerError(err: ServerError) u16 {
 
 pub fn decodeServerError(code: u16) ServerError {
     return switch (code) {
-        1 => error.InvalidMessageType,
+        1 => error.UnexpectedMessage,
         2 => error.CorruptMessageTag,
         3 => error.MaxPathLengthExceeded,
         4 => error.UnexpectedEndOfConnection,
@@ -46,25 +46,51 @@ pub fn decodeServerError(code: u16) ServerError {
 
 const TagType = u16;
 
+pub const ReadHeader = packed struct {
+    length: u16,
+};
+pub const ListHeader = packed struct {
+    length: u16,
+};
+pub const CdHeader = packed struct {
+    length: u16,
+};
+pub const FileHeader = packed struct {
+    size: u64,
+};
+pub const EntryHeader = packed struct {
+    length: u8,
+    is_dir: bool,
+};
+pub const PathHeader = packed struct {
+    length: u16,
+};
+pub const CorruptHeader = packed struct {
+    tag: TagType,
+};
+pub const ErrorHeader = packed struct {
+    code: u16,
+    arg1: u32,
+    arg2: u32,
+};
+pub const EmptyHeader = packed struct {};
+
 pub const Header = union(enum(TagType)) {
-    Read: packed struct { length: u8 },
-    File: packed struct { size: u64 },
-    List: packed struct { length: u8 },
-    Entry: packed struct {
-        length: u8,
-        is_dir: bool,
-    },
-    End: packed struct {},
-    Cd: packed struct { length: u8 },
-    Pwd: packed struct {},
-    Path: packed struct { length: u16 },
-    Ok: packed struct {},
-    Ping: packed struct {},
-    PingReply: packed struct {},
-    Quit: packed struct {},
-    QuitReply: packed struct {},
-    Corrupt: packed struct { tag: TagType },
-    Error: packed struct { code: u16, arg1: u32, arg2: u32 },
+    Read: ReadHeader,
+    File: FileHeader,
+    List: ListHeader,
+    Entry: EntryHeader,
+    End: EmptyHeader,
+    Cd: CdHeader,
+    Pwd: EmptyHeader,
+    Path: PathHeader,
+    Ok: EmptyHeader,
+    Ping: EmptyHeader,
+    PingReply: EmptyHeader,
+    Quit: EmptyHeader,
+    QuitReply: EmptyHeader,
+    Corrupt: CorruptHeader,
+    Error: ErrorHeader,
 };
 
 pub const Message = struct {

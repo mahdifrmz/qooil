@@ -8,6 +8,9 @@ const Header = protocol.Header;
 const Config = configure.Config;
 const Message = protocol.Message;
 const ServerError = protocol.ServerError;
+const CdHeader = protocol.CdHeader;
+const ListHeader = protocol.ListHeader;
+const ReadHeader = protocol.ReadHeader;
 
 const Errors = error{
     Client,
@@ -112,7 +115,7 @@ fn ServerHandler(comptime T: type) type {
             }
             return cwd;
         }
-        fn readPath(self: *Self, length: u8, buffer: []u8) ![]u8 {
+        fn readPath(self: *Self, length: u16, buffer: []u8) ![]u8 {
             if (length > std.os.NAME_MAX)
                 try self.sendError(ServerError.MaxPathLengthExceeded, length, 0);
             const count: usize = try self.stream.reader().readAll(buffer[0..length]);
@@ -135,136 +138,142 @@ fn ServerHandler(comptime T: type) type {
                 },
             );
         }
+        fn handlePing(self: *Self) !void {
+            try self.send(
+                .{
+                    .PingReply = .{},
+                },
+            );
+        }
+        fn handleQuit(self: *Self) !void {
+            self.isExiting = true;
+            try self.send(
+                .{
+                    .QuitReply = .{},
+                },
+            );
+        }
+        fn handleCd(self: *Self, hdr: CdHeader) !void {
+            var buf = [_]u8{0} ** std.os.NAME_MAX;
+            const path = try self.readPath(hdr.length, buf[0..]);
+            var depth: usize = 0;
+            const dir = try self.openDir(path, &depth);
+            self.cwd.close();
+            self.cwd = dir;
+            self.depth = depth;
+            try self.send(
+                .{
+                    .Ok = .{},
+                },
+            );
+        }
+        fn handlePwd(self: *Self) !void {
+            var buf = [_]u8{0} ** std.os.PATH_MAX;
+            var root_buf = [_]u8{0} ** std.os.PATH_MAX;
+            const path = self.cwd.realpath(".", &buf) catch unreachable;
+            const root_path = self.cwd_original.realpath(".", &root_buf) catch unreachable;
+            try self.send(
+                .{
+                    .Path = .{
+                        .length = @intCast(@max(path.len - root_path.len, 1)),
+                    },
+                },
+            );
+            if (path.len == root_path.len)
+                try self.write("/");
+            try self.write(path[root_path.len..]);
+        }
+        fn handleList(self: *Self, hdr: ListHeader) !void {
+            var buf = [_]u8{0} ** std.os.NAME_MAX;
+            const path = try self.readPath(hdr.length, buf[0..]);
+            var depth: usize = 0;
+            var dir = try self.openDir(path, &depth);
+            defer dir.close();
+            try self.send(.{
+                .Ok = .{},
+            });
+            var iterable = try dir.openIterableDir(".", .{});
+            defer iterable.close();
+            var iter = iterable.iterate();
+            while (try iter.next()) |entry| {
+                switch (entry.kind) {
+                    .file, .directory => {
+                        try self.send(
+                            .{
+                                .Entry = .{
+                                    .length = @intCast(entry.name.len),
+                                    .is_dir = entry.kind == std.fs.File.Kind.directory,
+                                },
+                            },
+                        );
+                        try self.write(entry.name);
+                    },
+                    else => continue,
+                }
+            }
+            try self.endOfList();
+        }
+        fn handleRead(self: *Self, hdr: ReadHeader) !void {
+            var buf = [_]u8{0} ** @max(std.os.NAME_MAX, 0x1000);
+            const path = try self.readPath(hdr.length, buf[0..]);
+            var dir = if (std.fs.path.dirname(path)) |dir_path|
+                try self.openDir(dir_path, null)
+            else
+                try self.cwd.openDir(".", .{});
+
+            defer dir.close();
+            const file_name = std.fs.path.basename(path);
+            if (file_name.len == 0) {
+                try self.sendError(ServerError.IsNotFile, 0, 0);
+                return error.Client;
+            }
+            const file = dir.openFile(file_name, .{}) catch |err| {
+                switch (err) {
+                    error.FileNotFound => {
+                        try self.sendError(ServerError.NonExisting, 0, 0);
+                        return error.Client;
+                    },
+                    error.AccessDenied => {
+                        try self.sendError(ServerError.AccessDenied, 0, 0);
+                        return error.Client;
+                    },
+                    else => {
+                        return err;
+                    },
+                }
+            };
+            defer file.close();
+            const file_stat = try file.stat();
+            try self.send(
+                .{
+                    .File = .{
+                        .size = file_stat.size,
+                    },
+                },
+            );
+            while (true) {
+                const count = try file.readAll(buf[0..]);
+                try self.write(buf[0..count]);
+                if (count < buf.len) {
+                    break;
+                }
+            }
+        }
         fn handleMessage(self: *Self, mes: Message) !void {
             switch (mes.header) {
-                .Ping => {
-                    try self.send(
-                        .{
-                            .PingReply = .{},
-                        },
-                    );
-                },
-                .Quit => {
-                    self.isExiting = true;
-                    try self.send(
-                        .{
-                            .QuitReply = .{},
-                        },
-                    );
-                },
-                .Cd => |hdr| {
-                    var buf = [_]u8{0} ** std.os.NAME_MAX;
-                    const path = try self.readPath(hdr.length, buf[0..]);
-                    var depth: usize = 0;
-                    const dir = try self.openDir(path, &depth);
-                    self.cwd.close();
-                    self.cwd = dir;
-                    self.depth = depth;
-                    try self.send(
-                        .{
-                            .Ok = .{},
-                        },
-                    );
-                },
-                .Pwd => |_| {
-                    var buf = [_]u8{0} ** std.os.PATH_MAX;
-                    var root_buf = [_]u8{0} ** std.os.PATH_MAX;
-                    const path = self.cwd.realpath(".", &buf) catch unreachable;
-                    const root_path = self.cwd_original.realpath(".", &root_buf) catch unreachable;
-                    try self.send(
-                        .{
-                            .Path = .{
-                                .length = @intCast(@max(path.len - root_path.len, 1)),
-                            },
-                        },
-                    );
-                    if (path.len == root_path.len)
-                        try self.write("/");
-                    try self.write(path[root_path.len..]);
-                },
-                .List => |hdr| {
-                    var buf = [_]u8{0} ** std.os.NAME_MAX;
-                    const path = try self.readPath(hdr.length, buf[0..]);
-                    var depth: usize = 0;
-                    var dir = try self.openDir(path, &depth);
-                    defer dir.close();
-                    try self.send(.{
-                        .Ok = .{},
-                    });
-                    var iterable = try dir.openIterableDir(".", .{});
-                    defer iterable.close();
-                    var iter = iterable.iterate();
-                    while (try iter.next()) |entry| {
-                        switch (entry.kind) {
-                            .file, .directory => {
-                                try self.send(
-                                    .{
-                                        .Entry = .{
-                                            .length = @intCast(entry.name.len),
-                                            .is_dir = entry.kind == std.fs.File.Kind.directory,
-                                        },
-                                    },
-                                );
-                                try self.write(entry.name);
-                            },
-                            else => continue,
-                        }
-                    }
-                    try self.endOfList();
-                },
-                .Read => |hdr| {
-                    var buf = [_]u8{0} ** @max(std.os.NAME_MAX, 0x1000);
-                    const path = try self.readPath(hdr.length, buf[0..]);
-                    var dir = if (std.fs.path.dirname(path)) |dir_path|
-                        try self.openDir(dir_path, null)
-                    else
-                        try self.cwd.openDir(".", .{});
-
-                    defer dir.close();
-                    const file_name = std.fs.path.basename(path);
-                    if (file_name.len == 0) {
-                        try self.sendError(ServerError.IsNotFile, 0, 0);
-                        return error.Client;
-                    }
-                    const file = dir.openFile(file_name, .{}) catch |err| {
-                        switch (err) {
-                            error.FileNotFound => {
-                                try self.sendError(ServerError.NonExisting, 0, 0);
-                                return error.Client;
-                            },
-                            error.AccessDenied => {
-                                try self.sendError(ServerError.AccessDenied, 0, 0);
-                                return error.Client;
-                            },
-                            else => {
-                                return err;
-                            },
-                        }
-                    };
-                    defer file.close();
-                    const file_stat = try file.stat();
-                    try self.send(
-                        .{
-                            .File = .{
-                                .size = file_stat.size,
-                            },
-                        },
-                    );
-                    while (true) {
-                        const count = try file.readAll(buf[0..]);
-                        try self.write(buf[0..count]);
-                        if (count < buf.len) {
-                            break;
-                        }
-                    }
-                },
+                .Ping => try self.handlePing(),
+                .Quit => try self.handleQuit(),
+                .Cd => |hdr| try self.handleCd(hdr),
+                .Pwd => try self.handlePwd(),
+                .List => |hdr| try self.handleList(hdr),
+                .Read => |hdr| try self.handleRead(hdr),
                 .Corrupt => |hdr| try self.sendError(
                     ServerError.CorruptMessageTag,
                     hdr.tag,
                     0,
                 ),
                 else => try self.sendError(
-                    ServerError.InvalidMessageType,
+                    ServerError.UnexpectedMessage,
                     @intFromEnum(mes.header),
                     0,
                 ),
@@ -606,7 +615,7 @@ test "invalid commands" {
         },
     );
     try server.expectError(
-        ServerError.InvalidMessageType,
+        ServerError.UnexpectedMessage,
         @intFromEnum(
             Header{
                 .Ok = .{},

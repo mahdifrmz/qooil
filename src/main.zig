@@ -5,7 +5,7 @@ const protocol = @import("protocol.zig");
 const configure = @import("configure.zig");
 const log = @import("log.zig");
 const server_mod = @import("server.zig");
-const cli = @import("cli.zig");
+const Repl = @import("repl.zig");
 
 const Server = server_mod.Server;
 const Message = protocol.Message;
@@ -34,7 +34,8 @@ pub fn main() !void {
         var server = Server.init(conf);
         try server.runServer();
     } else {
-        try cli.mainloop(conf);
+        var repl = Repl.init(conf);
+        try repl.mainloop(conf);
     }
 }
 

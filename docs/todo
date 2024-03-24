@@ -1,11 +1,15 @@
 ### Bugs
 
 ### Features
+* client better line editor
+* client read file
+* client download file
+* ls coloring (distincting dirs from files)
+* server should handle multiple clients
 * server should provide max length of paths
 * upload file
 * remove file
 * directory manipulation
-* client cli
 * client history
 * parallel transfers
 * multi-root
