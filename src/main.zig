@@ -6,6 +6,7 @@ const configure = @import("configure.zig");
 const log = @import("log.zig");
 const server_mod = @import("server.zig");
 const Repl = @import("repl.zig");
+const tests = @import("test.zig");
 
 const Server = server_mod.Server;
 const Message = protocol.Message;

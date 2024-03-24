@@ -1,4 +1,5 @@
 ### Bugs
+* `Client.readEntry` does not return exact length
 
 ### Features
 * client better line editor
