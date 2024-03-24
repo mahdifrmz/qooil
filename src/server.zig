@@ -12,10 +12,6 @@ const CdHeader = protocol.CdHeader;
 const ListHeader = protocol.ListHeader;
 const ReadHeader = protocol.ReadHeader;
 
-const Errors = error{
-    Client,
-};
-
 /// Created per client.
 /// File/stream agnostic.
 /// Works on anything that implements reader() & writer().
@@ -104,7 +100,7 @@ pub fn ServerHandler(comptime T: type) type {
                     };
                     cwd.close();
                     try self.sendError(cerr, 0, 0);
-                    return error.Client;
+                    return err;
                 };
                 cwd.close();
                 cwd = new_cwd;
@@ -225,14 +221,14 @@ pub fn ServerHandler(comptime T: type) type {
             const file_name = std.fs.path.basename(path);
             if (file_name.len == 0) {
                 try self.sendError(ServerError.IsNotFile, 0, 0);
-                return error.Client;
+                return;
             }
             const file_stat = try dir.statFile(file_name);
             switch (file_stat.kind) {
                 .file => {},
                 else => {
                     try self.sendError(ServerError.IsNotFile, 0, 0);
-                    return error.Client;
+                    return;
                 },
             }
             const file = dir.openFile(file_name, .{}) catch |err| {
@@ -240,11 +236,11 @@ pub fn ServerHandler(comptime T: type) type {
                 switch (err) {
                     error.FileNotFound => {
                         try self.sendError(ServerError.NonExisting, 0, 0);
-                        return error.Client;
+                        return;
                     },
                     error.AccessDenied => {
                         try self.sendError(ServerError.AccessDenied, 0, 0);
-                        return error.Client;
+                        return;
                     },
                     else => {
                         return err;
