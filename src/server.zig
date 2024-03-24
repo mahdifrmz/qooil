@@ -69,7 +69,7 @@ pub fn ServerHandler(comptime T: type) type {
             return protocol.readMessage(self.stream.reader());
         }
         fn openDir(self: *Self, path: []const u8, dir_depth: ?*usize) !std.fs.Dir {
-            var iter = std.mem.splitScalar(u8, path, '/');
+            var iter = try std.fs.path.componentIterator(path);
             var depth = self.depth;
             var cwd = blk: {
                 if (path.len > 0 and path[0] == '/') {
@@ -80,9 +80,9 @@ pub fn ServerHandler(comptime T: type) type {
                 }
             };
             while (iter.next()) |seg| {
-                if (seg.len == 0)
+                if (seg.name.len == 0)
                     continue;
-                const is_dotdot = std.mem.eql(u8, seg, "..");
+                const is_dotdot = std.mem.eql(u8, seg.name, "..");
                 if (is_dotdot) {
                     if (depth > 0) {
                         depth -= 1;
@@ -93,7 +93,7 @@ pub fn ServerHandler(comptime T: type) type {
                     depth += 1;
                 }
 
-                const new_cwd = cwd.openDir(seg, .{
+                const new_cwd = cwd.openDir(seg.name, .{
                     .no_follow = true,
                 }) catch |err| {
                     const cerr = switch (err) {
