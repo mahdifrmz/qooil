@@ -1,6 +1,4 @@
 ### Bugs
-* `Client.readEntry` does not return exact length
-* repl `ls` command is leaking memory
 
 ### Features
 * client better line editor

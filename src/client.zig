@@ -12,6 +12,12 @@ pub const Error = error{
     NotReadingEntry,
 } || ServerError;
 
+pub const Entry = struct {
+    name_buffer: []u8,
+    name: []u8,
+    is_dir: bool,
+};
+
 pub fn Client(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -70,11 +76,6 @@ pub fn Client(comptime T: type) type {
         fn writeBuffer(self: *Self, buffer: []const u8) !void {
             return self.stream.?.writer().writeAll(buffer);
         }
-
-        pub const Entry = struct {
-            name: []u8,
-            is_dir: bool,
-        };
 
         pub fn init() Self {
             return .{
@@ -202,6 +203,7 @@ pub fn Client(comptime T: type) type {
                         var name = try allocator.alloc(u8, hdr.length);
                         _ = try self.readToBuffer(name, hdr.length);
                         try list.append(.{
+                            .name_buffer = name,
                             .name = name,
                             .is_dir = hdr.is_dir,
                         });
@@ -216,7 +218,7 @@ pub fn Client(comptime T: type) type {
             try self.checkConnected();
             try self.send(.{
                 .List = .{
-                    .length = path.len,
+                    .length = @intCast(path.len),
                 },
             });
             _ = try self.writeBuffer(path);
@@ -231,7 +233,8 @@ pub fn Client(comptime T: type) type {
             switch (try self.recv()) {
                 .Entry => |hdr| {
                     entry.is_dir = hdr.is_dir;
-                    _ = try self.readToBuffer(entry.name, hdr.length);
+                    const len = try self.readToBuffer(entry.name_buffer, hdr.length);
+                    entry.name = entry.name_buffer[0..len];
                 },
                 .End => {
                     self.is_reading_entries = false;
@@ -244,8 +247,9 @@ pub fn Client(comptime T: type) type {
             try self.checkReadingEntry();
             var buf = [_]u8{0} ** 256;
             var entry = Entry{
-                .name = buf[0..],
-                .is_dir = false,
+                .name_buffer = buf[0..],
+                .name = undefined,
+                .is_dir = undefined,
             };
             while (self.is_reading_entries)
                 _ = try self.readEntry(&entry);

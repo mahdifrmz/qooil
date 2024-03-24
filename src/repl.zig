@@ -6,6 +6,7 @@ const client_mod = @import("client.zig");
 const Config = configure.Config;
 const Client = client_mod.Client;
 const ServerError = client_mod.ServerError;
+const Entry = client_mod.Entry;
 
 const CliError = error{
     NotEnoughArgs,
@@ -71,9 +72,14 @@ fn exec(self: *Self) !bool {
         try self.client.ping();
         println("the server is up");
     } else if (std.mem.eql(u8, command, "ls")) {
-        var entries = try self.client.getEntriesAlloc(self.next() catch ".", self.config.allocator);
-        defer entries.deinit();
-        for (entries.items) |entry| {
+        try self.client.getEntries(self.next() catch ".");
+        var buf = [_]u8{0} ** 256;
+        var entry = Entry{
+            .name_buffer = buf[0..],
+            .name = undefined,
+            .is_dir = undefined,
+        };
+        while (try self.client.readEntry(&entry)) {
             println(entry.name);
         }
     } else {
