@@ -309,14 +309,32 @@ pub fn ServerHandler(comptime T: type) type {
 
 pub const Server = struct {
     const Self = @This();
+    const Handler = ServerHandler(net.Stream);
 
     config: Config,
+    pool: std.Thread.Pool,
 
     pub fn init(config: Config) Self {
-        return .{ .config = config };
+        return .{
+            .config = config,
+            .pool = undefined,
+        };
+    }
+
+    fn handlerThread(stream: net.Stream, config: Config) void {
+        var stream_mut = stream;
+        var handler = Handler.init(&config, &stream_mut);
+        handler.handleClient() catch {};
     }
 
     pub fn runServer(self: *Self) !void {
+        try self.pool.init(
+            .{
+                .allocator = self.config.allocator,
+                .n_jobs = self.config.thread_pool_size,
+            },
+        );
+        defer self.pool.deinit();
         const addr = net.Address.resolveIp(self.config.address, self.config.port) catch log.showError(
             "Invalid bind IP address",
             .{},
@@ -337,9 +355,7 @@ pub const Server = struct {
             },
         );
         while (stream_server.accept()) |client| {
-            var client_mut = client;
-            var handler = ServerHandler(std.net.Stream).init(&self.config, &client_mut.stream);
-            handler.handleClient() catch {};
+            try self.pool.spawn(handlerThread, .{ client.stream, self.config });
         } else |_| {
             log.showError("Connection failure", .{});
         }

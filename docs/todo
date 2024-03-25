@@ -1,9 +1,10 @@
 ### Bugs
+* tests only work on linux (pipes)
 
 ### Features
 * client better line editor
 * ls coloring (distincting dirs from files)
-* server should handle multiple clients
+* server thread pool size limits active clients count (use coroutines instead)
 * proper REPL error handling
 * upload file
 * remove file

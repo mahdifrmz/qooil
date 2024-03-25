@@ -155,6 +155,7 @@ pub const Config = struct {
     port: u16,
     is_server: bool,
     allocator: std.mem.Allocator,
+    thread_pool_size: u32,
 
     fn parsePort(self: *Self, args: Arguments) !void {
         if (args.port) |p| {
@@ -193,6 +194,7 @@ pub const Config = struct {
             .is_server = false,
             .address = "0.0.0.0",
             .port = DEFAULT_PORT,
+            .thread_pool_size = 200,
         };
     }
 };
