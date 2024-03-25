@@ -2,6 +2,7 @@ const std = @import("std");
 const net = std.net;
 const config_mod = @import("config.zig");
 const client_mod = @import("client.zig");
+const log = @import("log.zig");
 
 const Config = config_mod.Config;
 const Client = client_mod.Client;
@@ -44,21 +45,6 @@ fn makePrompt(self: *Self) ![]const u8 {
     return prompt;
 }
 
-fn printFmt(comptime fmt: []const u8, args: anytype) !void {
-    const writer = std.io.getStdOut().writer();
-    try std.fmt.format(writer, fmt, args);
-}
-fn errPrintFmt(comptime fmt: []const u8, args: anytype) !void {
-    const writer = std.io.getStdErr().writer();
-    try std.fmt.format(writer, fmt, args);
-}
-fn print(text: []const u8) void {
-    std.io.getStdOut().writeAll(text) catch {};
-}
-fn println(text: []const u8) void {
-    printFmt("{s}\n", .{text}) catch {};
-}
-
 fn exec(self: *Self) !bool {
     if (self.params.items.len == 0)
         return false;
@@ -69,19 +55,19 @@ fn exec(self: *Self) !bool {
     } else if (std.mem.eql(u8, command, "pwd")) {
         const path = try self.client.getCwdAlloc(self.config.allocator);
         defer self.config.allocator.free(path);
-        println(path);
+        log.println(path);
     } else if (std.mem.eql(u8, command, "quit")) {
         return true;
     } else if (std.mem.eql(u8, command, "ping")) {
         try self.client.ping();
-        println("the server is up");
+        log.println("the server is up");
     } else if (std.mem.eql(u8, command, "cat")) {
         _ = try self.client.getFile(try self.next(), std.io.getStdOut().writer());
     } else if (std.mem.eql(u8, command, "get")) {
         const remote_path = try self.next();
         const local_path = try self.next();
         const local_file = std.fs.cwd().createFile(local_path, .{}) catch {
-            try errPrintFmt("failed to open local file: {s}\n", .{local_path});
+            log.errPrintFmt("failed to open local file: {s}\n", .{local_path});
             return false;
         };
         defer local_file.close();
@@ -95,7 +81,7 @@ fn exec(self: *Self) !bool {
             .is_dir = undefined,
         };
         while (try self.client.readEntry(&entry)) {
-            println(entry.name);
+            log.println(entry.name);
         }
     } else {
         return error.UnknownCommand;
@@ -107,7 +93,7 @@ fn runloop(self: *Self) !bool {
     // print prompt
     const prompt = try self.makePrompt();
     defer self.config.allocator.free(prompt);
-    print(prompt);
+    log.print(prompt);
     // read line
     var line_buffer = [_]u8{0} ** 0x1000;
     const len = try std.io.getStdIn().read(line_buffer[0..]);
@@ -137,7 +123,7 @@ pub fn mainloop(self: *Self, config: Config) !void {
                 => @errorName(err),
                 else => return err,
             };
-            try printFmt("Error: {s}\n", .{error_text});
+            log.printFmt("Error: {s}\n", .{error_text});
             continue;
         };
         if (will_exit) {

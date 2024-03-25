@@ -335,20 +335,25 @@ pub const Server = struct {
             },
         );
         defer self.pool.deinit();
-        const addr = net.Address.resolveIp(self.config.address, self.config.port) catch log.showError(
-            "Invalid bind IP address",
-            .{},
-        );
+        const addr = net.Address.resolveIp(self.config.address, self.config.port) catch {
+            log.eprintln(
+                "Invalid bind IP address",
+            );
+            std.process.exit(1);
+        };
         var stream_server = net.StreamServer.init(.{});
-        stream_server.listen(addr) catch log.showError(
-            "Could not listen on {s}:{d}",
-            .{
-                self.config.address,
-                self.config.port,
-            },
-        );
-        log.showLog(
-            "Server listening on {s}:{d}",
+        stream_server.listen(addr) catch {
+            log.errPrintFmt(
+                "Could not listen on {s}:{d}\n",
+                .{
+                    self.config.address,
+                    self.config.port,
+                },
+            );
+            std.process.exit(1);
+        };
+        log.printFmt(
+            "Server listening on {s}:{d}\n",
             .{
                 self.config.address,
                 self.config.port,
@@ -357,7 +362,7 @@ pub const Server = struct {
         while (stream_server.accept()) |client| {
             try self.pool.spawn(handlerThread, .{ client.stream, self.config });
         } else |_| {
-            log.showError("Connection failure", .{});
+            log.eprintln("Connection failure");
         }
     }
 };

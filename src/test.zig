@@ -61,7 +61,7 @@ const ServerTester = struct {
     fn runServer(config: Config, channel: Channel) void {
         var channel_mut = channel;
         var handler = ServerHandler(Channel).init(&config, &channel_mut);
-        handler.handleClient();
+        handler.handleClient() catch {};
         channel_mut.deinit();
     }
 
