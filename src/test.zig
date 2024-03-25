@@ -164,6 +164,22 @@ test "ping" {
     try client.close();
 }
 
+test "info" {
+    var server = try ServerTester.init(Config.init(std.testing.allocator));
+    defer server.deinit();
+
+    var client = Client(Channel).init();
+    try client.connect(server.channel);
+
+    const info = try client.info();
+    try std.testing.expectEqual(protocol.InfoHeader{
+        .max_name = std.fs.MAX_NAME_BYTES,
+        .max_path = std.fs.MAX_PATH_BYTES,
+    }, info);
+
+    try client.close();
+}
+
 test "working directory" {
     const allocator = std.testing.allocator;
     const temp_dir = try makeTestDir();
@@ -266,7 +282,6 @@ test "list of files" {
                 found = true;
                 break;
             }
-            // std.debug.print("no one: {s}\n", )
         }
         if (!found)
             unreachable;

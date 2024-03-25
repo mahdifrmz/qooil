@@ -2,10 +2,8 @@
 
 ### Features
 * client better line editor
-* client download file
 * ls coloring (distincting dirs from files)
 * server should handle multiple clients
-* server should provide max length of paths
 * proper REPL error handling
 * upload file
 * remove file

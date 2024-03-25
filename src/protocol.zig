@@ -85,12 +85,19 @@ pub const Header = union(enum(TagType)) {
     Pwd: EmptyHeader,
     Path: PathHeader,
     Ok: EmptyHeader,
+    GetInfo: EmptyHeader,
+    Info: InfoHeader,
     Ping: EmptyHeader,
     PingReply: EmptyHeader,
     Quit: EmptyHeader,
     QuitReply: EmptyHeader,
     Corrupt: CorruptHeader,
     Error: ErrorHeader,
+};
+
+pub const InfoHeader = struct {
+    max_name: usize,
+    max_path: usize,
 };
 
 pub const Message = struct {

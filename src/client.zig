@@ -21,12 +21,13 @@ pub const Entry = struct {
 pub fn Client(comptime T: type) type {
     return struct {
         const Self = @This();
-        pub const DEFAULT_PORT = 7070;
+        const READ_BUFFER_SIZE = 0x1000;
 
         is_reading_entries: bool,
         stream: ?T,
         server_error_arg1: u32,
         server_error_arg2: u32,
+        server_info: ?protocol.InfoHeader,
 
         fn send(self: *Self, header: Header) !void {
             try protocol.writeMessage(.{
@@ -66,11 +67,16 @@ pub fn Client(comptime T: type) type {
                 return error.NotReadingEntry;
             }
         }
-        fn readToBuffer(self: *Self, buffer: []u8, length: usize) !usize {
-            if (length > buffer.len) {
-                return self.stream.?.reader().readAll(buffer);
+        fn readPayload(self: *Self, buffer: ?[]u8, length: usize) !usize {
+            if (buffer) |buf| {
+                if (length > buf.len) {
+                    return self.stream.?.reader().readAll(buf);
+                } else {
+                    return self.stream.?.reader().readAll(buf[0..length]);
+                }
             } else {
-                return self.stream.?.reader().readAll(buffer[0..length]);
+                try self.stream.?.reader().skipBytes(length, .{});
+                return 0;
             }
         }
         fn writeBuffer(self: *Self, buffer: []const u8) !void {
@@ -83,6 +89,7 @@ pub fn Client(comptime T: type) type {
                 .stream = null,
                 .server_error_arg1 = 0,
                 .server_error_arg2 = 0,
+                .server_info = null,
             };
         }
         pub fn connect(self: *Self, stream: T) !void {
@@ -100,6 +107,21 @@ pub fn Client(comptime T: type) type {
                 .PingReply => {},
                 else => {},
             }
+        }
+        pub fn info(self: *Self) !protocol.InfoHeader {
+            if (self.server_info) |inf| {
+                return inf;
+            }
+            try self.send(
+                .{
+                    .GetInfo = .{},
+                },
+            );
+            self.server_info = switch (try self.recv()) {
+                .Info => |hdr| hdr,
+                else => return error.Protocol,
+            };
+            return self.info();
         }
         pub fn setCwd(self: *Self, path: []const u8) !void {
             try self.checkConnected();
@@ -127,7 +149,7 @@ pub fn Client(comptime T: type) type {
             const resp = try self.recv();
             switch (resp) {
                 .Path => |hdr| {
-                    _ = try self.readToBuffer(buffer, hdr.length);
+                    _ = try self.readPayload(buffer, hdr.length);
                 },
                 else => return error.Protocol,
             }
@@ -143,7 +165,7 @@ pub fn Client(comptime T: type) type {
             switch (resp) {
                 .Path => |hdr| {
                     var buffer = try allocator.alloc(u8, hdr.length);
-                    _ = try self.readToBuffer(buffer, hdr.length);
+                    _ = try self.readPayload(buffer, hdr.length);
                     return buffer;
                 },
                 else => return error.Protocol,
@@ -162,11 +184,11 @@ pub fn Client(comptime T: type) type {
             const resp = try self.recv();
             switch (resp) {
                 .File => |hdr| {
-                    var buf = [_]u8{0} ** 1024;
+                    var buf = [_]u8{0} ** READ_BUFFER_SIZE;
                     var rem = hdr.size;
                     while (rem > 0) {
                         const expected = @min(rem, buf.len);
-                        const count = try self.readToBuffer(buf[0..expected], expected);
+                        const count = try self.readPayload(buf[0..expected], expected);
                         _ = try writer.writeAll(buf[0..count]);
                         if (count != expected) {
                             return error.Protocol;
@@ -201,7 +223,7 @@ pub fn Client(comptime T: type) type {
                 switch (try self.recv()) {
                     .Entry => |hdr| {
                         var name = try allocator.alloc(u8, hdr.length);
-                        _ = try self.readToBuffer(name, hdr.length);
+                        _ = try self.readPayload(name, hdr.length);
                         try list.append(.{
                             .name_buffer = name,
                             .name = name,
@@ -228,13 +250,17 @@ pub fn Client(comptime T: type) type {
             }
             self.is_reading_entries = true;
         }
-        pub fn readEntry(self: *Self, entry: *Entry) !bool {
+        pub fn readEntry(self: *Self, entry: ?*Entry) !bool {
             try self.checkReadingEntry();
             switch (try self.recv()) {
                 .Entry => |hdr| {
-                    entry.is_dir = hdr.is_dir;
-                    const len = try self.readToBuffer(entry.name_buffer, hdr.length);
-                    entry.name = entry.name_buffer[0..len];
+                    if (entry) |ent| {
+                        ent.is_dir = hdr.is_dir;
+                        const len = try self.readPayload(ent.name_buffer, hdr.length);
+                        ent.name = ent.name_buffer[0..len];
+                    } else {
+                        _ = try self.readPayload(null, hdr.length);
+                    }
                 },
                 .End => {
                     self.is_reading_entries = false;
@@ -245,14 +271,8 @@ pub fn Client(comptime T: type) type {
         }
         pub fn abortReadingEntry(self: *Self) !void {
             try self.checkReadingEntry();
-            var buf = [_]u8{0} ** 256;
-            var entry = Entry{
-                .name_buffer = buf[0..],
-                .name = undefined,
-                .is_dir = undefined,
-            };
             while (self.is_reading_entries)
-                _ = try self.readEntry(&entry);
+                _ = try self.readEntry(null);
         }
         pub fn close(self: *Self) !void {
             if (self.is_reading_entries)

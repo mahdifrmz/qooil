@@ -17,6 +17,9 @@ const ReadHeader = protocol.ReadHeader;
 /// Works on anything that implements reader() & writer().
 pub fn ServerHandler(comptime T: type) type {
     return struct {
+        const MAX_NAME = std.fs.MAX_NAME_BYTES;
+        const MAX_PATH = std.fs.MAX_PATH_BYTES;
+        const READ_BUFFER_SIZE = 0x1000;
         const Self = @This();
 
         isExiting: bool,
@@ -112,7 +115,7 @@ pub fn ServerHandler(comptime T: type) type {
             return cwd;
         }
         fn readPath(self: *Self, length: u16, buffer: []u8) ![]u8 {
-            if (length > std.os.NAME_MAX)
+            if (length > MAX_NAME)
                 try self.sendError(ServerError.MaxPathLengthExceeded, length, 0);
             const count: usize = try self.stream.reader().readAll(buffer[0..length]);
             if (count < length) {
@@ -150,7 +153,7 @@ pub fn ServerHandler(comptime T: type) type {
             );
         }
         fn handleCd(self: *Self, hdr: CdHeader) !void {
-            var buf = [_]u8{0} ** std.os.NAME_MAX;
+            var buf = [_]u8{0} ** MAX_NAME;
             const path = try self.readPath(hdr.length, buf[0..]);
             var depth: usize = 0;
             const dir = try self.openDir(path, &depth);
@@ -164,8 +167,8 @@ pub fn ServerHandler(comptime T: type) type {
             );
         }
         fn handlePwd(self: *Self) !void {
-            var buf = [_]u8{0} ** std.os.PATH_MAX;
-            var root_buf = [_]u8{0} ** std.os.PATH_MAX;
+            var buf = [_]u8{0} ** MAX_PATH;
+            var root_buf = [_]u8{0} ** MAX_PATH;
             const path = self.cwd.realpath(".", &buf) catch unreachable;
             const root_path = self.cwd_original.realpath(".", &root_buf) catch unreachable;
             try self.send(
@@ -180,7 +183,7 @@ pub fn ServerHandler(comptime T: type) type {
             try self.write(path[root_path.len..]);
         }
         fn handleList(self: *Self, hdr: ListHeader) !void {
-            var buf = [_]u8{0} ** std.os.NAME_MAX;
+            var buf = [_]u8{0} ** MAX_NAME;
             const path = try self.readPath(hdr.length, buf[0..]);
             var depth: usize = 0;
             var dir = try self.openDir(path, &depth);
@@ -209,8 +212,18 @@ pub fn ServerHandler(comptime T: type) type {
             }
             try self.endOfList();
         }
+        fn handleGetInfo(self: *Self) !void {
+            try self.send(
+                .{
+                    .Info = .{
+                        .max_name = MAX_NAME,
+                        .max_path = MAX_PATH,
+                    },
+                },
+            );
+        }
         fn handleRead(self: *Self, hdr: ReadHeader) !void {
-            var buf = [_]u8{0} ** @max(std.os.NAME_MAX, 0x1000);
+            var buf = [_]u8{0} ** @max(MAX_NAME, READ_BUFFER_SIZE);
             const path = try self.readPath(hdr.length, buf[0..]);
             var dir = if (std.fs.path.dirname(path)) |dir_path|
                 try self.openDir(dir_path, null)
@@ -271,6 +284,7 @@ pub fn ServerHandler(comptime T: type) type {
                 .Pwd => try self.handlePwd(),
                 .List => |hdr| try self.handleList(hdr),
                 .Read => |hdr| try self.handleRead(hdr),
+                .GetInfo => try self.handleGetInfo(),
                 .Corrupt => |hdr| try self.sendError(
                     ServerError.CorruptMessageTag,
                     hdr.tag,
