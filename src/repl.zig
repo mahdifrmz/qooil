@@ -48,6 +48,10 @@ fn printFmt(comptime fmt: []const u8, args: anytype) !void {
     const writer = std.io.getStdOut().writer();
     try std.fmt.format(writer, fmt, args);
 }
+fn errPrintFmt(comptime fmt: []const u8, args: anytype) !void {
+    const writer = std.io.getStdErr().writer();
+    try std.fmt.format(writer, fmt, args);
+}
 fn print(text: []const u8) void {
     std.io.getStdOut().writeAll(text) catch {};
 }
@@ -73,6 +77,15 @@ fn exec(self: *Self) !bool {
         println("the server is up");
     } else if (std.mem.eql(u8, command, "cat")) {
         _ = try self.client.getFile(try self.next(), std.io.getStdOut().writer());
+    } else if (std.mem.eql(u8, command, "get")) {
+        const remote_path = try self.next();
+        const local_path = try self.next();
+        const local_file = std.fs.cwd().createFile(local_path, .{}) catch {
+            try errPrintFmt("failed to open local file: {s}\n", .{local_path});
+            return false;
+        };
+        defer local_file.close();
+        _ = try self.client.getFile(remote_path, local_file.writer());
     } else if (std.mem.eql(u8, command, "ls")) {
         try self.client.getEntries(self.next() catch ".");
         var buf = [_]u8{0} ** 256;
