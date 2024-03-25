@@ -1,11 +1,11 @@
 const std = @import("std");
 const net = std.net;
-const configure = @import("configure.zig");
+const config_mod = @import("config.zig");
 const protocol = @import("protocol.zig");
 const log = @import("log.zig");
 
 const Header = protocol.Header;
-const Config = configure.Config;
+const Config = config_mod.Config;
 const Message = protocol.Message;
 const ServerError = protocol.ServerError;
 const CdHeader = protocol.CdHeader;

@@ -24,11 +24,13 @@ const Arguments = struct {
     address: ?[]const u8,
     port: ?[]const u8,
     help: bool,
+    thread_count: ?[]const u8,
 };
 
 const ConfigError = error{
     MissingOption,
     InvalidPort,
+    InvalidThreadCount,
     UnknownFlag,
 };
 
@@ -46,6 +48,7 @@ pub const ArgParser = struct {
         return .{
             .iterator = iter_mut,
             .arguments = .{
+                .thread_count = null,
                 .port = null,
                 .mode = null,
                 .address = null,
@@ -110,6 +113,9 @@ pub const ArgParser = struct {
             },
             'p' => {
                 self.arguments.port = try self.expect("port");
+            },
+            'j' => {
+                self.arguments.thread_count = try self.expect("thread count");
             },
             else => {
                 self.fault = token;
@@ -180,9 +186,22 @@ pub const Config = struct {
         }
     }
 
+    fn parseThreadCount(self: *Self, args: Arguments) !void {
+        if (args.thread_count) |tc| {
+            const count = std.fmt.parseInt(u32, tc, 10) catch {
+                return error.InvalidThreadCount;
+            };
+            if (count == 0) {
+                return error.InvalidThreadCount;
+            }
+            self.thread_pool_size = count;
+        }
+    }
+
     pub fn parseCLI(self: *Self, args: Arguments) !void {
         try self.parsePort(args);
         try self.parseAddress(args);
+        try self.parseThreadCount(args);
         if (args.mode) |m| {
             self.is_server = m == ExecMode.Server;
         }

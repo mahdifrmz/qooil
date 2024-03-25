@@ -1,9 +1,9 @@
 const std = @import("std");
 const net = std.net;
-const configure = @import("configure.zig");
+const config_mod = @import("config.zig");
 const client_mod = @import("client.zig");
 
-const Config = configure.Config;
+const Config = config_mod.Config;
 const Client = client_mod.Client;
 const ServerError = client_mod.ServerError;
 const Entry = client_mod.Entry;

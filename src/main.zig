@@ -2,7 +2,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const net = std.net;
 const protocol = @import("protocol.zig");
-const configure = @import("configure.zig");
+const config_mod = @import("config.zig");
 const log = @import("log.zig");
 const server_mod = @import("server.zig");
 const Repl = @import("repl.zig");
@@ -12,8 +12,8 @@ const Server = server_mod.Server;
 const Message = protocol.Message;
 const Header = protocol.Header;
 const ServerErrors = protocol.ServerErrors;
-const ArgParser = configure.ArgParser;
-const Config = configure.Config;
+const ArgParser = config_mod.ArgParser;
+const Config = config_mod.Config;
 
 var gpa: std.heap.GeneralPurposeAllocator(.{}) = undefined;
 
