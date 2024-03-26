@@ -92,9 +92,20 @@ const ChannelStream = struct {
         return .{ .context = self };
     }
 };
+
 /// Upon initialization, creates a thread which runs a single ServerHandler.
 /// The server and client communicate over channels.
 /// Call deinit to `join` the thread.
+///
+/// Why test like this?
+///
+/// This allows the tests to be fully independent. Running a TCP server for
+/// every test makes it impossible to parallelize tests, as multiple servers
+/// can not listen on a single port number.
+///
+/// Running a server instance for all the tests is also not practical; as failure
+/// in one test might corrupt the server's global state and cause failure in
+/// other tests.
 const ServerTester = struct {
     thread: std.Thread,
     // server to client

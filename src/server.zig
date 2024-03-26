@@ -72,6 +72,10 @@ pub fn ServerHandler(comptime T: type) type {
         fn recv(self: *Self) !Message {
             return protocol.readMessage(self.stream.reader());
         }
+
+        /// This should ALWAYS be called instead of `std.fs.cwd().openDir()`. The
+        /// server must act like a `chroot`ed process, and MUST NOT let the client
+        /// peek into directories which are not in working tree of Server process.
         fn openDir(self: *Self, path: []const u8, dir_depth: ?*usize) !std.fs.Dir {
             var iter = try std.fs.path.componentIterator(path);
             var depth = self.depth;
@@ -130,27 +134,12 @@ pub fn ServerHandler(comptime T: type) type {
         fn write(self: *Self, buffer: []const u8) !void {
             try self.stream.writer().writeAll(buffer);
         }
-        fn endOfList(self: *Self) !void {
-            try self.send(
-                .{
-                    .End = .{},
-                },
-            );
-        }
         fn handlePing(self: *Self) !void {
-            try self.send(
-                .{
-                    .PingReply = .{},
-                },
-            );
+            try self.send(.{ .PingReply = .{} });
         }
         fn handleQuit(self: *Self) !void {
             self.isExiting = true;
-            try self.send(
-                .{
-                    .QuitReply = .{},
-                },
-            );
+            try self.send(.{ .QuitReply = .{} });
         }
         fn handleCd(self: *Self, hdr: CdHeader) !void {
             var buf = [_]u8{0} ** MAX_NAME;
@@ -160,11 +149,7 @@ pub fn ServerHandler(comptime T: type) type {
             self.cwd.close();
             self.cwd = dir;
             self.depth = depth;
-            try self.send(
-                .{
-                    .Ok = .{},
-                },
-            );
+            try self.send(.{ .Ok = .{} });
         }
         fn handlePwd(self: *Self) !void {
             var buf = [_]u8{0} ** MAX_PATH;
@@ -210,7 +195,7 @@ pub fn ServerHandler(comptime T: type) type {
                     else => continue,
                 }
             }
-            try self.endOfList();
+            try self.send(.{ .End = .{} });
         }
         fn handleGetInfo(self: *Self) !void {
             try self.send(
@@ -383,6 +368,8 @@ pub const Server = struct {
     const Handler = ServerHandler(net.Stream);
 
     config: Config,
+    /// This is currently the server's bottleneck, as the number of TCP connections
+    /// at any given time can't go above the thread count of the thread pool.
     pool: std.Thread.Pool,
 
     pub fn init(config: Config) Self {
@@ -437,13 +424,3 @@ pub const Server = struct {
         }
     }
 };
-
-fn isServerError(err: anyerror) ?ServerError {
-    const info = @typeInfo(ServerError);
-    inline for (info.ErrorSet orelse .{}) |opt| {
-        if (err == @field(ServerError, opt.name)) {
-            return @errSetCast(err);
-        }
-    }
-    return null;
-}
