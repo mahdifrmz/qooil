@@ -25,13 +25,15 @@ const HELP_MESSAGE =
     \\ -p               port to listen/connect (default is 7070)
     \\ -h               show this help
     \\ -j               server thread count
-    \\Examples:
-    \\      qooil
-    \\      # connect to server running on localhost on port 7070
     \\
-    \\      qooil -s -p 7777 -a 127.0.0.1 -j 100
-    \\      # run server on port 7777 and loopback interface
-    \\      # with thread pool size of 100 threads
+    \\Examples:
+    \\
+    \\ qooil
+    \\ # connect to server running on localhost on port 7070
+    \\
+    \\ qooil -s -p 7777 -a 127.0.0.1 -j 100
+    \\ # run server on port 7777 and loopback interface
+    \\ # with thread pool size of 100 threads
     \\
 ;
 
