@@ -348,6 +348,30 @@ test "write file" {
     try expectFile(file_path, file_content);
 }
 
+test "delete file" {
+    const allocator = std.testing.allocator;
+    const temp_dir = try makeTestDir();
+    defer removeTestDir(temp_dir);
+    const file_name = "test-file";
+    const file_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ temp_dir, file_name });
+    defer allocator.free(file_path);
+    try makeTestFile(temp_dir, file_name, "");
+
+    var server = try ServerTester.init(Config.init(allocator));
+    defer server.deinit();
+
+    var client = Client(ChannelStream).init();
+    try client.connect(server.stream);
+    try client.deleteFile(file_path);
+    try client.close();
+    expectFile(file_path, "") catch |err| {
+        switch (err) {
+            error.FileNotFound => {},
+            else => unreachable,
+        }
+    };
+}
+
 test "list of files" {
     const allocator = std.testing.allocator;
     const temp_dir = try makeTestDir();

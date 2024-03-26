@@ -67,19 +67,23 @@ pub const Header = union(enum(TagType)) {
     Quit: EmptyHeader = 14,
     QuitReply: EmptyHeader = 15,
     Write: WriteHeader = 16,
+    Delete: DeleteHeader = 17,
     /// This is only returned by the message parser
     /// to indicate that the peer has returned a
     /// message with an unknown type tag. This message
     /// type should not be sent by neither the client
     /// nor the server.
-    Corrupt: CorruptHeader = 17,
-    Error: ErrorHeader = 18,
+    Corrupt: CorruptHeader = 18,
+    Error: ErrorHeader = 19,
 };
 pub const EmptyHeader = packed struct {};
 pub const ReadHeader = packed struct {
     length: u16,
 };
 pub const WriteHeader = packed struct {
+    length: u16,
+};
+pub const DeleteHeader = packed struct {
     length: u16,
 };
 pub const ListHeader = packed struct {

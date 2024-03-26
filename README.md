@@ -55,7 +55,7 @@ exiting:
 
 ## Todo
 - [x] upload file
-- [ ] remove file
+- [x] remove file
 - [ ] directory manipulation
 - [ ] client download manager & download history
 - [ ] parallel transfers

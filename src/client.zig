@@ -228,6 +228,18 @@ pub fn Client(comptime T: type) type {
             }
             try self.recvOk();
         }
+        pub fn deleteFile(self: *Self, path: []const u8) !void {
+            try self.checkConnected();
+            try self.send(
+                .{
+                    .Delete = .{
+                        .length = @intCast(path.len),
+                    },
+                },
+            );
+            _ = try self.writeBuffer(path);
+            try self.recvOk();
+        }
         pub fn getEntriesAlloc(self: *Self, path: []const u8, allocator: std.mem.Allocator) !std.ArrayList(Entry) {
             try self.checkConnected();
             try self.send(.{

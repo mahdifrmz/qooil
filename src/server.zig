@@ -12,6 +12,7 @@ const CdHeader = protocol.CdHeader;
 const ListHeader = protocol.ListHeader;
 const ReadHeader = protocol.ReadHeader;
 const WriteHeader = protocol.WriteHeader;
+const DeleteHeader = protocol.DeleteHeader;
 
 /// Created per client.
 /// File/stream agnostic.
@@ -228,15 +229,16 @@ pub fn ServerHandler(comptime T: type) type {
             self: *Self,
             path: []const u8,
             open_write: bool,
+            parent: ?*std.fs.Dir,
         ) !std.fs.File {
+            const file_name = std.fs.path.basename(path);
+            if (file_name.len == 0)
+                return ServerError.InvalidFileName;
             var dir = if (std.fs.path.dirname(path)) |dir_path|
                 try self.openDir(dir_path, null)
             else
                 copyDir(self.cwd);
-            defer dir.close();
-            const file_name = std.fs.path.basename(path);
-            if (file_name.len == 0)
-                return ServerError.InvalidFileName;
+            errdefer dir.close();
             const file = (if (open_write)
                 dir.createFile(file_name, .{})
             else
@@ -250,7 +252,14 @@ pub fn ServerHandler(comptime T: type) type {
             };
             const stat = try file.stat();
             switch (stat.kind) {
-                .file => return file,
+                .file => {
+                    if (parent) |prnt| {
+                        prnt.* = dir;
+                    } else {
+                        dir.close();
+                    }
+                    return file;
+                },
                 else => return ServerError.IsNotFile,
             }
         }
@@ -260,6 +269,7 @@ pub fn ServerHandler(comptime T: type) type {
             const file = try self.openFile(
                 path,
                 false,
+                null,
             );
             defer file.close();
             const stat = try file.stat();
@@ -278,12 +288,26 @@ pub fn ServerHandler(comptime T: type) type {
                 }
             }
         }
+        fn handleDelete(self: *Self, hdr: DeleteHeader) !void {
+            var buf = [_]u8{0} ** @max(MAX_NAME, READ_BUFFER_SIZE);
+            const path = try self.readPath(hdr.length, buf[0..]);
+            var parent: std.fs.Dir = undefined;
+            const file = try self.openFile(
+                path,
+                true,
+                &parent,
+            );
+            defer file.close();
+            try parent.deleteFile(std.fs.path.basename(path));
+            try self.send(.{ .Ok = .{} });
+        }
         fn handleWrite(self: *Self, hdr: WriteHeader) !void {
             var buf = [_]u8{0} ** @max(MAX_NAME, READ_BUFFER_SIZE);
             const path = try self.readPath(hdr.length, buf[0..]);
             const file = try self.openFile(
                 path,
                 true,
+                null,
             );
             defer file.close();
             try self.send(.{ .Ok = .{} });
@@ -313,6 +337,7 @@ pub fn ServerHandler(comptime T: type) type {
                 .Read => |hdr| try self.handleRead(hdr),
                 .Write => |hdr| try self.handleWrite(hdr),
                 .GetInfo => try self.handleGetInfo(),
+                .Delete => |hdr| try self.handleDelete(hdr),
                 .Corrupt => |hdr| {
                     self.error_arg1 = hdr.tag;
                     return ServerError.CorruptMessageTag;
