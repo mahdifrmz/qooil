@@ -17,32 +17,73 @@ const Client = client_mod.Client;
 const Server = server_mod.Server;
 const ServerHandler = server_mod.ServerHandler;
 
+// The tests for both the server and the client.
+
+/// A naive implementation of a single-producer single-consumer inter-thread communication.
+/// This is just for the purpose of testing and thus no real performance is required.
 const Channel = struct {
+    const Self = @This();
+    const DEFAULT_SIZE = 0x1000;
+
+    /// notifies the reader for incoming bytes
+    read_sem: std.Thread.Semaphore,
+    /// notifies the writer for free-space
+    write_sem: std.Thread.Semaphore,
+    /// control access to underlying ring buffer
+    mtx: std.Thread.Mutex,
+    buffer: std.RingBuffer,
+
+    pub fn init(allocator: std.mem.Allocator) !Self {
+        return .{
+            .mtx = std.Thread.Mutex{},
+            .read_sem = std.Thread.Semaphore{},
+            .write_sem = std.Thread.Semaphore{
+                .permits = DEFAULT_SIZE,
+            },
+            .buffer = try std.RingBuffer.init(allocator, DEFAULT_SIZE),
+        };
+    }
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        self.buffer.deinit(allocator);
+    }
+    pub fn readByte(self: *Self) u8 {
+        self.read_sem.wait();
+        self.mtx.lock();
+        const byte = self.buffer.read().?;
+        self.mtx.unlock();
+        self.write_sem.post();
+        return byte;
+    }
+    pub fn writeByte(self: *Self, byte: u8) void {
+        self.write_sem.wait();
+        self.mtx.lock();
+        self.buffer.write(byte) catch unreachable;
+        self.mtx.unlock();
+        self.read_sem.post();
+    }
+};
+
+/// holds references to two channels.
+/// Uses one for sending & the other for recieving data.
+const ChannelStream = struct {
     const Self = @This();
     const Reader = std.io.Reader(*Self, std.os.ReadError, read);
     const Writer = std.io.Writer(*Self, std.os.WriteError, write);
 
-    pipe: [2]std.os.fd_t,
+    sender: *Channel,
+    reciever: *Channel,
 
-    pub fn init() ![2]Self {
-        const p1 = try std.os.pipe();
-        const p2 = try std.os.pipe();
-
-        return .{ .{
-            .pipe = .{ p2[0], p1[1] },
-        }, .{
-            .pipe = .{ p1[0], p2[1] },
-        } };
-    }
-    pub fn deinit(self: *Self) void {
-        std.os.close(self.pipe[0]);
-        std.os.close(self.pipe[1]);
-    }
     pub fn read(self: *Self, buf: []u8) std.os.ReadError!usize {
-        return std.os.read(self.pipe[0], buf);
+        for (buf) |*byte| {
+            byte.* = self.reciever.readByte();
+        }
+        return buf.len;
     }
     pub fn write(self: *Self, buf: []const u8) std.os.WriteError!usize {
-        return std.os.write(self.pipe[1], buf);
+        for (buf) |byte| {
+            self.sender.writeByte(byte);
+        }
+        return buf.len;
     }
     pub fn reader(self: *Self) Reader {
         return .{ .context = self };
@@ -51,36 +92,61 @@ const Channel = struct {
         return .{ .context = self };
     }
 };
-
+/// Upon initialization, creates a thread which runs a single ServerHandler.
+/// The server and client communicate over channels.
+/// Call deinit to `join` the thread.
 const ServerTester = struct {
     thread: std.Thread,
-    channel: Channel,
+    // server to client
+    inner_cts: *Channel,
+    // client to server
+    inner_stc: *Channel,
+    stream: ChannelStream,
+    allocator: std.mem.Allocator,
 
     const Self = @This();
 
-    fn runServer(config: Config, channel: Channel) void {
+    /// this runs in another thread
+    fn runServer(config: Config, channel: ChannelStream) void {
         var channel_mut = channel;
-        var handler = ServerHandler(Channel).init(&config, &channel_mut);
+        // create a handler instance that operates on a channel
+        var handler = ServerHandler(ChannelStream).init(&config, &channel_mut);
         handler.handleClient() catch {};
-        channel_mut.deinit();
     }
 
     fn init(config: Config) !Self {
-        const channels = try Channel.init();
-        const thread = try std.Thread.spawn(.{}, runServer, .{ config, channels[0] });
+        const stc = try config.allocator.create(Channel);
+        const cts = try config.allocator.create(Channel);
+        stc.* = try Channel.init(config.allocator);
+        cts.* = try Channel.init(config.allocator);
+        const server = ChannelStream{
+            .sender = stc,
+            .reciever = cts,
+        };
+        const client = ChannelStream{
+            .sender = cts,
+            .reciever = stc,
+        };
+        const thread = try std.Thread.spawn(.{}, runServer, .{ config, server });
         return .{
             .thread = thread,
-            .channel = channels[1],
+            .inner_stc = stc,
+            .inner_cts = cts,
+            .stream = client,
+            .allocator = config.allocator,
         };
     }
     fn deinit(self: *Self) void {
-        self.channel.deinit();
+        self.inner_cts.deinit(self.allocator);
+        self.inner_stc.deinit(self.allocator);
+        self.allocator.destroy(self.inner_cts);
+        self.allocator.destroy(self.inner_stc);
     }
     fn recv(self: *Self) !Message {
-        return try protocol.readMessage(self.channel.reader());
+        return try protocol.readMessage(self.stream.reader());
     }
     fn send(self: *Self, mes: Message) !void {
-        try protocol.writeMessage(mes, self.channel.writer());
+        try protocol.writeMessage(mes, self.stream.writer());
     }
 };
 
@@ -108,17 +174,35 @@ fn removeTestDir(name: []const u8) void {
     std.testing.allocator.free(name);
 }
 
-fn expectCwd(client: *Client(Channel), exp: []const u8) !void {
+fn expectCwd(client: *Client(ChannelStream), exp: []const u8) !void {
     const pwd = try client.getCwdAlloc(std.testing.allocator);
     defer std.testing.allocator.free(pwd);
     try std.testing.expectEqualSlices(u8, exp, pwd);
+}
+
+// this simple test shows how to test the server & client
+test "ping" {
+    // run the server in a new thread
+    var server = try ServerTester.init(Config.init(std.testing.allocator));
+    // join the thread
+    defer server.deinit();
+
+    // create the client instance that operates on a channel
+    var client = Client(ChannelStream).init();
+    try client.connect(server.stream);
+
+    // use client as usual
+    try client.ping();
+
+    // send the <quit>
+    try client.close();
 }
 
 test "corrupt tag" {
     var server = try ServerTester.init(Config.init(std.testing.allocator));
     defer server.deinit();
     const corrupt_tag = std.mem.nativeToLittle(u16, 0xeeee);
-    _ = try server.channel.write(std.mem.asBytes(&corrupt_tag));
+    _ = try server.stream.write(std.mem.asBytes(&corrupt_tag));
     const resp = try server.recv();
     try std.testing.expectEqual(Message{
         .header = .{
@@ -152,24 +236,12 @@ test "invalid commands" {
     }, resp);
 }
 
-test "ping" {
-    var server = try ServerTester.init(Config.init(std.testing.allocator));
-    defer server.deinit();
-
-    var client = Client(Channel).init();
-    try client.connect(server.channel);
-
-    try client.ping();
-
-    try client.close();
-}
-
 test "info" {
     var server = try ServerTester.init(Config.init(std.testing.allocator));
     defer server.deinit();
 
-    var client = Client(Channel).init();
-    try client.connect(server.channel);
+    var client = Client(ChannelStream).init();
+    try client.connect(server.stream);
 
     const info = try client.info();
     try std.testing.expectEqual(protocol.InfoHeader{
@@ -187,8 +259,8 @@ test "working directory" {
     var server = try ServerTester.init(Config.init(allocator));
     defer server.deinit();
 
-    var client = Client(Channel).init();
-    try client.connect(server.channel);
+    var client = Client(ChannelStream).init();
+    try client.connect(server.stream);
 
     try client.setCwd(temp_dir);
     const exp_pwd = try std.fmt.allocPrint(std.testing.allocator, "/{s}", .{temp_dir});
@@ -225,8 +297,8 @@ test "read file" {
     var buf = [_]u8{0} ** 64;
     var buf_stream = std.io.fixedBufferStream(buf[0..]);
 
-    var client = Client(Channel).init();
-    try client.connect(server.channel);
+    var client = Client(ChannelStream).init();
+    try client.connect(server.stream);
     _ = client.getFile(
         temp_dir,
         buf_stream.writer(),
@@ -262,8 +334,8 @@ test "list of files" {
     var server = try ServerTester.init(Config.init(allocator));
     defer server.deinit();
 
-    var client = Client(Channel).init();
-    try client.connect(server.channel);
+    var client = Client(ChannelStream).init();
+    try client.connect(server.stream);
     var entries = try client.getEntriesAlloc(temp_dir, std.testing.allocator);
     defer {
         for (entries.items) |entry| {
