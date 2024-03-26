@@ -146,6 +146,7 @@ pub fn mainloop(self: *Self, config: Config) !void {
                 error.IsNotDir,
                 error.AccessDenied,
                 error.CantOpen,
+                error.InvalidFileName,
                 => @errorName(err),
                 else => return err,
             };
