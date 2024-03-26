@@ -345,6 +345,8 @@ pub fn ServerHandler(comptime T: type) type {
                             return err;
                         },
                     }
+                    self.error_arg1 = 0;
+                    self.error_arg2 = 0;
                 };
             }
         }
