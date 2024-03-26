@@ -72,6 +72,16 @@ fn exec(self: *Self) !bool {
         };
         defer local_file.close();
         _ = try self.client.getFile(remote_path, local_file.writer());
+    } else if (std.mem.eql(u8, command, "put")) {
+        const remote_path = try self.next();
+        const local_path = try self.next();
+        const local_file = std.fs.cwd().openFile(local_path, .{}) catch {
+            log.errPrintFmt("failed to open local file: {s}\n", .{local_path});
+            return false;
+        };
+        const local_file_stat = try local_file.stat();
+        defer local_file.close();
+        _ = try self.client.putFile(remote_path, local_file.reader(), local_file_stat.size);
     } else if (std.mem.eql(u8, command, "ls")) {
         try self.client.getEntries(self.next() catch ".");
         var buf = [_]u8{0} ** 256;
