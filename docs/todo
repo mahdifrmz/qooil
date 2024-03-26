@@ -5,13 +5,15 @@
 * ls coloring (distincting dirs from files)
 * server thread pool size limits active clients count (use coroutines instead)
 * proper REPL error handling
+
+### Roadmap
 * upload file
 * remove file
 * directory manipulation
-* client history
+* client download manager & download history
 * parallel transfers
 * multi-root
-* proxy
+* proxy/mirror
 * authentication
 * per-dir/file permissions
 * compression
