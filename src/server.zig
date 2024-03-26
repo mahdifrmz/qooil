@@ -28,6 +28,8 @@ pub fn ServerHandler(comptime T: type) type {
         cwd_original: std.fs.Dir,
         stream: *T,
         depth: usize,
+        error_arg1: u32,
+        error_arg2: u32,
 
         pub fn init(config: *const Config, stream: *T) Self {
             const cwd = std.fs.cwd();
@@ -35,9 +37,11 @@ pub fn ServerHandler(comptime T: type) type {
                 .isExiting = false,
                 .config = config,
                 .cwd_original = cwd,
-                .cwd = cwd.openDir(".", .{}) catch unreachable,
+                .cwd = copyDir(cwd),
                 .stream = stream,
                 .depth = 0,
+                .error_arg1 = 0,
+                .error_arg2 = 0,
             };
         }
 
@@ -45,17 +49,16 @@ pub fn ServerHandler(comptime T: type) type {
             self.cwd.close();
         }
 
-        fn sendError(self: *Self, err: ServerError, arg1: u32, arg2: u32) !void {
+        fn sendError(self: *Self, err: ServerError) !void {
             try self.send(
                 .{
                     .Error = .{
                         .code = protocol.encodeServerError(err),
-                        .arg1 = arg1,
-                        .arg2 = arg2,
+                        .arg1 = self.error_arg1,
+                        .arg2 = self.error_arg2,
                     },
                 },
             );
-            return err;
         }
 
         fn send(self: *Self, header: Header) !void {
@@ -70,14 +73,15 @@ pub fn ServerHandler(comptime T: type) type {
         fn openDir(self: *Self, path: []const u8, dir_depth: ?*usize) !std.fs.Dir {
             var iter = try std.fs.path.componentIterator(path);
             var depth = self.depth;
-            var cwd = blk: {
-                if (path.len > 0 and path[0] == '/') {
+            var dir = blk: {
+                if (std.fs.path.isAbsolute(path)) {
                     depth = 0;
-                    break :blk try self.cwd_original.openDir(".", .{});
+                    break :blk copyDir(self.cwd_original);
                 } else {
-                    break :blk try self.cwd.openDir(".", .{});
+                    break :blk copyDir(self.cwd);
                 }
             };
+            errdefer dir.close();
             while (iter.next()) |seg| {
                 if (seg.name.len == 0)
                     continue;
@@ -92,39 +96,33 @@ pub fn ServerHandler(comptime T: type) type {
                     depth += 1;
                 }
 
-                const new_cwd = cwd.openDir(seg.name, .{
+                const new_dir = dir.openDir(seg.name, .{
                     .no_follow = true,
                 }) catch |err| {
-                    const cerr = switch (err) {
+                    return switch (err) {
                         error.FileNotFound => ServerError.NonExisting,
                         error.NotDir => ServerError.IsNotDir,
                         error.AccessDenied => ServerError.AccessDenied,
                         else => ServerError.CantOpen,
                     };
-                    cwd.close();
-                    try self.sendError(cerr, 0, 0);
-                    return err;
                 };
-                cwd.close();
-                cwd = new_cwd;
+                dir = new_dir;
             }
 
             if (dir_depth) |dd| {
                 dd.* = depth;
             }
-            return cwd;
+            return dir;
         }
         fn readPath(self: *Self, length: u16, buffer: []u8) ![]u8 {
-            if (length > MAX_NAME)
-                try self.sendError(ServerError.MaxPathLengthExceeded, length, 0);
-            const count: usize = try self.stream.reader().readAll(buffer[0..length]);
-            if (count < length) {
-                try self.sendError(
-                    ServerError.UnexpectedEndOfConnection,
-                    0,
-                    0,
-                );
+            if (length > MAX_NAME) {
+                try self.stream.reader().skipBytes(length, .{});
+                self.error_arg1 = length;
+                return ServerError.InvalidFileName;
             }
+            const count: usize = try self.stream.reader().readAll(buffer[0..length]);
+            if (count < length)
+                return ServerError.UnexpectedEndOfConnection;
             return buffer[0..count];
         }
         fn write(self: *Self, buffer: []const u8) !void {
@@ -222,49 +220,52 @@ pub fn ServerHandler(comptime T: type) type {
                 },
             );
         }
-        fn handleRead(self: *Self, hdr: ReadHeader) !void {
-            var buf = [_]u8{0} ** @max(MAX_NAME, READ_BUFFER_SIZE);
-            const path = try self.readPath(hdr.length, buf[0..]);
+        fn copyDir(dir: std.fs.Dir) std.fs.Dir {
+            return dir.openDir(".", .{}) catch unreachable;
+        }
+        fn openFile(
+            self: *Self,
+            path: []const u8,
+            open_write: bool,
+        ) !std.fs.File {
             var dir = if (std.fs.path.dirname(path)) |dir_path|
                 try self.openDir(dir_path, null)
             else
-                try self.cwd.openDir(".", .{});
-
+                copyDir(self.cwd);
             defer dir.close();
             const file_name = std.fs.path.basename(path);
-            if (file_name.len == 0) {
-                try self.sendError(ServerError.IsNotFile, 0, 0);
-                return;
-            }
-            const file_stat = try dir.statFile(file_name);
-            switch (file_stat.kind) {
-                .file => {},
-                else => {
-                    try self.sendError(ServerError.IsNotFile, 0, 0);
-                    return;
-                },
-            }
-            const file = dir.openFile(file_name, .{}) catch |err| {
-                // std.debug.print("file={s}\n", .{file_name});
-                switch (err) {
-                    error.FileNotFound => {
-                        try self.sendError(ServerError.NonExisting, 0, 0);
-                        return;
-                    },
-                    error.AccessDenied => {
-                        try self.sendError(ServerError.AccessDenied, 0, 0);
-                        return;
-                    },
-                    else => {
-                        return err;
-                    },
-                }
+            if (file_name.len == 0)
+                return ServerError.InvalidFileName;
+            const file = (if (open_write)
+                dir.createFile(file_name, .{})
+            else
+                dir.openFile(file_name, .{})) catch |err| {
+                return switch (err) {
+                    error.FileNotFound => ServerError.NonExisting,
+                    error.AccessDenied => ServerError.AccessDenied,
+                    error.IsDir => ServerError.IsNotFile,
+                    else => err,
+                };
             };
+            const stat = try file.stat();
+            switch (stat.kind) {
+                .file => return file,
+                else => return ServerError.IsNotFile,
+            }
+        }
+        fn handleRead(self: *Self, hdr: ReadHeader) !void {
+            var buf = [_]u8{0} ** @max(MAX_NAME, READ_BUFFER_SIZE);
+            const path = try self.readPath(hdr.length, buf[0..]);
+            const file = try self.openFile(
+                path,
+                false,
+            );
             defer file.close();
+            const stat = try file.stat();
             try self.send(
                 .{
                     .File = .{
-                        .size = file_stat.size,
+                        .size = stat.size,
                     },
                 },
             );
@@ -285,23 +286,39 @@ pub fn ServerHandler(comptime T: type) type {
                 .List => |hdr| try self.handleList(hdr),
                 .Read => |hdr| try self.handleRead(hdr),
                 .GetInfo => try self.handleGetInfo(),
-                .Corrupt => |hdr| try self.sendError(
-                    ServerError.CorruptMessageTag,
-                    hdr.tag,
-                    0,
-                ),
-                else => try self.sendError(
-                    ServerError.UnexpectedMessage,
-                    @intFromEnum(mes.header),
-                    0,
-                ),
+                .Corrupt => |hdr| {
+                    self.error_arg1 = hdr.tag;
+                    return ServerError.CorruptMessageTag;
+                },
+                else => {
+                    self.error_arg1 = @intFromEnum(mes.header);
+                    return ServerError.UnexpectedMessage;
+                },
             }
         }
 
         pub fn handleClient(self: *Self) !void {
             while (!self.isExiting) {
                 const mes = try self.recv();
-                self.handleMessage(mes) catch {};
+                self.handleMessage(mes) catch |err| {
+                    switch (err) {
+                        error.UnexpectedMessage,
+                        error.CorruptMessageTag,
+                        error.InvalidFileName,
+                        error.UnexpectedEndOfConnection,
+                        error.NonExisting,
+                        error.IsNotFile,
+                        error.IsNotDir,
+                        error.AccessDenied,
+                        error.CantOpen,
+                        => try self.sendError(
+                            @errSetCast(err),
+                        ),
+                        else => {
+                            return err;
+                        },
+                    }
+                };
             }
         }
     };
@@ -366,3 +383,13 @@ pub const Server = struct {
         }
     }
 };
+
+fn isServerError(err: anyerror) ?ServerError {
+    const info = @typeInfo(ServerError);
+    inline for (info.ErrorSet orelse .{}) |opt| {
+        if (err == @field(ServerError, opt.name)) {
+            return @errSetCast(err);
+        }
+    }
+    return null;
+}

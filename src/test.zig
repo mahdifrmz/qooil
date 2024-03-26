@@ -107,11 +107,11 @@ const ServerTester = struct {
     const Self = @This();
 
     /// this runs in another thread
-    fn runServer(config: Config, channel: ChannelStream) void {
+    fn runServer(config: Config, channel: ChannelStream) !void {
         var channel_mut = channel;
         // create a handler instance that operates on a channel
         var handler = ServerHandler(ChannelStream).init(&config, &channel_mut);
-        handler.handleClient() catch {};
+        try handler.handleClient();
     }
 
     fn init(config: Config) !Self {

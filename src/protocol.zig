@@ -113,7 +113,7 @@ pub const InfoHeader = struct {
 pub const ServerError = error{
     UnexpectedMessage,
     CorruptMessageTag,
-    MaxPathLengthExceeded,
+    InvalidFileName,
     UnexpectedEndOfConnection,
     NonExisting,
     IsNotFile,
@@ -129,7 +129,7 @@ pub fn encodeServerError(err: ServerError) u16 {
     return switch (err) {
         error.UnexpectedMessage => 1,
         error.CorruptMessageTag => 2,
-        error.MaxPathLengthExceeded => 3,
+        error.InvalidFileName => 3,
         error.UnexpectedEndOfConnection => 4,
         error.NonExisting => 5,
         error.IsNotFile => 6,
@@ -144,7 +144,7 @@ pub fn decodeServerError(code: u16) ServerError {
     return switch (code) {
         1 => error.UnexpectedMessage,
         2 => error.CorruptMessageTag,
-        3 => error.MaxPathLengthExceeded,
+        3 => error.InvalidFileName,
         4 => error.UnexpectedEndOfConnection,
         5 => error.NonExisting,
         6 => error.IsNotFile,
