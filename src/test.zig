@@ -179,6 +179,14 @@ fn expectCwd(client: *Client(ChannelStream), exp: []const u8) !void {
     defer std.testing.allocator.free(pwd);
     try std.testing.expectEqualSlices(u8, exp, pwd);
 }
+fn expectFile(path: []const u8, data: []const u8) !void {
+    try std.testing.expect(data.len < 256);
+    var buf = [_]u8{0} ** 256;
+    const file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+    const count = try file.readAll(buf[0..data.len]);
+    try std.testing.expectEqualSlices(u8, data, buf[0..count]);
+}
 
 // this simple test shows how to test the server & client
 test "ping" {
@@ -314,6 +322,30 @@ test "read file" {
     );
     try client.close();
     try std.testing.expectEqualSlices(u8, "some data", buf[0..size]);
+}
+
+test "write file" {
+    const allocator = std.testing.allocator;
+    const temp_dir = try makeTestDir();
+    defer removeTestDir(temp_dir);
+    const file_name = "test-file";
+    const file_content: []const u8 = "some data";
+    const file_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ temp_dir, file_name });
+    defer allocator.free(file_path);
+
+    var server = try ServerTester.init(Config.init(allocator));
+    defer server.deinit();
+    var buf_stream = std.io.fixedBufferStream(file_content[0..]);
+
+    var client = Client(ChannelStream).init();
+    try client.connect(server.stream);
+    try client.putFile(
+        file_path,
+        buf_stream.reader(),
+        file_content.len,
+    );
+    try client.close();
+    try expectFile(file_path, file_content);
 }
 
 test "list of files" {

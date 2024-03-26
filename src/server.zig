@@ -11,6 +11,7 @@ const ServerError = protocol.ServerError;
 const CdHeader = protocol.CdHeader;
 const ListHeader = protocol.ListHeader;
 const ReadHeader = protocol.ReadHeader;
+const WriteHeader = protocol.WriteHeader;
 
 /// Created per client.
 /// File/stream agnostic.
@@ -277,6 +278,31 @@ pub fn ServerHandler(comptime T: type) type {
                 }
             }
         }
+        fn handleWrite(self: *Self, hdr: WriteHeader) !void {
+            var buf = [_]u8{0} ** @max(MAX_NAME, READ_BUFFER_SIZE);
+            const path = try self.readPath(hdr.length, buf[0..]);
+            const file = try self.openFile(
+                path,
+                true,
+            );
+            defer file.close();
+            try self.send(.{ .Ok = .{} });
+            const next_msg = try self.recv();
+            const fhdr = switch (next_msg.header) {
+                .File => |fhdr| fhdr,
+                else => {
+                    self.error_arg1 = @intFromEnum(next_msg.header);
+                    return ServerError.UnexpectedMessage;
+                },
+            };
+            var rem = fhdr.size;
+            while (rem > 0) {
+                const count = try self.stream.reader().readAll(buf[0..@min(READ_BUFFER_SIZE, rem)]);
+                rem -= count;
+                _ = try file.write(buf[0..count]);
+            }
+            try self.send(.{ .Ok = .{} });
+        }
         fn handleMessage(self: *Self, mes: Message) !void {
             switch (mes.header) {
                 .Ping => try self.handlePing(),
@@ -285,6 +311,7 @@ pub fn ServerHandler(comptime T: type) type {
                 .Pwd => try self.handlePwd(),
                 .List => |hdr| try self.handleList(hdr),
                 .Read => |hdr| try self.handleRead(hdr),
+                .Write => |hdr| try self.handleWrite(hdr),
                 .GetInfo => try self.handleGetInfo(),
                 .Corrupt => |hdr| {
                     self.error_arg1 = hdr.tag;

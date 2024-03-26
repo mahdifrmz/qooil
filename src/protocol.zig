@@ -47,35 +47,39 @@ const TagType = u16;
 /// Some of these messages are only expected to be sent from the
 /// client and others are responses sent from the server.
 pub const Header = union(enum(TagType)) {
-    Read: ReadHeader,
-    File: FileHeader,
-    List: ListHeader,
-    Entry: EntryHeader,
+    Read: ReadHeader = 1,
+    File: FileHeader = 2,
+    List: ListHeader = 3,
+    Entry: EntryHeader = 4,
     /// indictaes that the last element has been sent
-    End: EmptyHeader,
-    Cd: CdHeader,
-    Pwd: EmptyHeader,
-    Path: PathHeader,
+    End: EmptyHeader = 5,
+    Cd: CdHeader = 6,
+    Pwd: EmptyHeader = 7,
+    Path: PathHeader = 8,
     /// sent by the server as a success response.
-    Ok: EmptyHeader,
-    GetInfo: EmptyHeader,
+    Ok: EmptyHeader = 9,
+    GetInfo: EmptyHeader = 10,
     /// parameter negotiation message
-    Info: InfoHeader,
-    Ping: EmptyHeader,
-    PingReply: EmptyHeader,
+    Info: InfoHeader = 11,
+    Ping: EmptyHeader = 12,
+    PingReply: EmptyHeader = 13,
     /// can be sent from the client to terminate the connection
-    Quit: EmptyHeader,
-    QuitReply: EmptyHeader,
+    Quit: EmptyHeader = 14,
+    QuitReply: EmptyHeader = 15,
+    Write: WriteHeader = 16,
     /// This is only returned by the message parser
     /// to indicate that the peer has returned a
     /// message with an unknown type tag. This message
     /// type should not be sent by neither the client
     /// nor the server.
-    Corrupt: CorruptHeader,
-    Error: ErrorHeader,
+    Corrupt: CorruptHeader = 17,
+    Error: ErrorHeader = 18,
 };
 pub const EmptyHeader = packed struct {};
 pub const ReadHeader = packed struct {
+    length: u16,
+};
+pub const WriteHeader = packed struct {
     length: u16,
 };
 pub const ListHeader = packed struct {

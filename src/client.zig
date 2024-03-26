@@ -21,7 +21,7 @@ pub const Entry = struct {
 pub fn Client(comptime T: type) type {
     return struct {
         const Self = @This();
-        const READ_BUFFER_SIZE = 0x1000;
+        const DATA_BUFFER_SIZE = 0x1000;
 
         is_reading_entries: bool,
         stream: ?T,
@@ -38,6 +38,12 @@ pub fn Client(comptime T: type) type {
             const mes = try protocol.readMessage(self.stream.?.reader());
             try self.check(mes.header);
             return mes.header;
+        }
+        fn recvOk(self: *Self) !void {
+            switch (try self.recv()) {
+                .Ok => {},
+                else => return error.Protocol,
+            }
         }
         fn check(self: *Self, header: Header) !void {
             switch (header) {
@@ -184,7 +190,7 @@ pub fn Client(comptime T: type) type {
             const resp = try self.recv();
             switch (resp) {
                 .File => |hdr| {
-                    var buf = [_]u8{0} ** READ_BUFFER_SIZE;
+                    var buf = [_]u8{0} ** DATA_BUFFER_SIZE;
                     var rem = hdr.size;
                     while (rem > 0) {
                         const expected = @min(rem, buf.len);
@@ -199,6 +205,28 @@ pub fn Client(comptime T: type) type {
                 },
                 else => return error.Protocol,
             }
+        }
+        pub fn putFile(self: *Self, path: []const u8, reader: anytype, size: u64) !void {
+            try self.checkConnected();
+            try self.send(
+                .{
+                    .Write = .{
+                        .length = @intCast(path.len),
+                    },
+                },
+            );
+            _ = try self.writeBuffer(path);
+            try self.recvOk();
+            try self.send(.{ .File = .{ .size = size } });
+            var buf = [_]u8{0} ** DATA_BUFFER_SIZE;
+            var rem = size;
+            while (rem > 0) {
+                const expected = @min(rem, buf.len);
+                const count = try reader.readAll(buf[0..expected]);
+                try self.writeBuffer(buf[0..count]);
+                rem -= expected;
+            }
+            try self.recvOk();
         }
         pub fn getEntriesAlloc(self: *Self, path: []const u8, allocator: std.mem.Allocator) !std.ArrayList(Entry) {
             try self.checkConnected();
