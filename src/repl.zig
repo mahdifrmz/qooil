@@ -95,6 +95,10 @@ fn command_put(self: *Self) !void {
     defer local_file.close();
     _ = try self.client.putFile(remote_path, local_file.reader(), local_file_stat.size);
 }
+fn command_delete(self: *Self) !void {
+    const remote_path = try self.next();
+    try self.client.deleteFile(remote_path);
+}
 fn command_ls(self: *Self) !void {
     try self.client.getEntries(self.next() catch ".");
     var buf = [_]u8{0} ** 256;
@@ -162,6 +166,7 @@ fn install_commands(self: *Self) !void {
     try self.command_table.put("cat", command_cat);
     try self.command_table.put("pwd", command_pwd);
     try self.command_table.put("cd", command_cd);
+    try self.command_table.put("delete", command_delete);
 }
 
 pub fn init(config: Config) Self {
