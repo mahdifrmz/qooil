@@ -14,8 +14,15 @@ const CliError = error{
     UnknownCommand,
 };
 
+const CommandCallback = *const fn (self: *Self) anyerror!void;
+
+const Command = struct {
+    callback: CommandCallback,
+    description: []const u8,
+};
+
 const Self = @This();
-const CommandMap = std.StringHashMap(*const fn (self: *Self) anyerror!void);
+const CommandMap = std.StringHashMap(Command);
 
 config: Config,
 client: Client(net.Stream),
@@ -51,8 +58,8 @@ fn exec(self: *Self) !void {
     if (self.params.items.len == 0)
         return;
     const command = try self.next();
-    const cb = self.command_table.get(command) orelse return error.UnknownCommand;
-    try cb(self);
+    const entry = self.command_table.get(command) orelse return error.UnknownCommand;
+    try entry.callback(self);
 }
 
 fn command_cd(self: *Self) !void {
@@ -99,6 +106,15 @@ fn command_delete(self: *Self) !void {
     const remote_path = try self.next();
     try self.client.deleteFile(remote_path);
 }
+fn command_help(self: *Self) !void {
+    var iter = self.command_table.iterator();
+    while (iter.next()) |entry| {
+        log.printFmt("{s}\t\t\t{s}\n", .{
+            entry.key_ptr.*,
+            entry.value_ptr.*.description,
+        });
+    }
+}
 fn command_ls(self: *Self) !void {
     try self.client.getEntries(self.next() catch ".");
     var buf = [_]u8{0} ** 256;
@@ -133,7 +149,7 @@ fn runloop(self: *Self) !void {
 
 pub fn mainloop(self: *Self, config: Config) !void {
     self.client = Client(net.Stream).init();
-    try self.install_commands();
+    try self.installCommands();
     const stream = try net.tcpConnectToHost(config.allocator, config.address, config.port);
     try self.client.connect(stream);
     while (!self.is_exiting) {
@@ -158,16 +174,72 @@ pub fn mainloop(self: *Self, config: Config) !void {
     stream.close();
 }
 
-fn install_commands(self: *Self) !void {
-    try self.command_table.put("put", command_put);
-    try self.command_table.put("get", command_get);
-    try self.command_table.put("ls", command_ls);
-    try self.command_table.put("quit", command_quit);
-    try self.command_table.put("ping", command_ping);
-    try self.command_table.put("cat", command_cat);
-    try self.command_table.put("pwd", command_pwd);
-    try self.command_table.put("cd", command_cd);
-    try self.command_table.put("delete", command_delete);
+fn addCommand(
+    self: *Self,
+    name: []const u8,
+    description: []const u8,
+    callback: CommandCallback,
+) !void {
+    try self.command_table.put(
+        name,
+        .{
+            .callback = callback,
+            .description = description,
+        },
+    );
+}
+
+fn installCommands(self: *Self) !void {
+    try self.addCommand(
+        "put",
+        "put <remote-path> <local-path> | upload file to server",
+        command_put,
+    );
+    try self.addCommand(
+        "get",
+        "get <remote-path> <local-path> | download file from server",
+        command_get,
+    );
+    try self.addCommand(
+        "ls",
+        "ls [dir] | shows entries in CWD or dir",
+        command_ls,
+    );
+    try self.addCommand(
+        "quit",
+        "close connection",
+        command_quit,
+    );
+    try self.addCommand(
+        "ping",
+        "check whether server is up or not",
+        command_ping,
+    );
+    try self.addCommand(
+        "cat",
+        "cat <file> | print file content to terminal",
+        command_cat,
+    );
+    try self.addCommand(
+        "pwd",
+        "show CWD",
+        command_pwd,
+    );
+    try self.addCommand(
+        "cd",
+        "cd <dir> | change CWD to dir",
+        command_cd,
+    );
+    try self.addCommand(
+        "delete",
+        "delete <file> | delete file",
+        command_delete,
+    );
+    try self.addCommand(
+        "help",
+        "print this help",
+        command_help,
+    );
 }
 
 pub fn init(config: Config) Self {
