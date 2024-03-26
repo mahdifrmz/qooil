@@ -17,12 +17,18 @@ const CliError = error{
 const CommandCallback = *const fn (self: *Self) anyerror!void;
 
 const Command = struct {
-    callback: CommandCallback,
+    name: []const u8,
     description: []const u8,
+    callback: CommandCallback,
 };
 
+fn commandlessThan(ctx: void, lhs: Command, rhs: Command) bool {
+    _ = ctx;
+    return std.mem.lessThan(u8, lhs.name, rhs.name);
+}
+
 const Self = @This();
-const CommandMap = std.StringHashMap(Command);
+const CommandMap = std.StringArrayHashMap(Command);
 
 config: Config,
 client: Client(net.Stream),
@@ -108,12 +114,14 @@ fn command_delete(self: *Self) !void {
 }
 fn command_help(self: *Self) !void {
     var iter = self.command_table.iterator();
+    log.println("");
     while (iter.next()) |entry| {
         log.printFmt("{s}\t\t\t{s}\n", .{
             entry.key_ptr.*,
             entry.value_ptr.*.description,
         });
     }
+    log.println("");
 }
 fn command_ls(self: *Self) !void {
     try self.client.getEntries(self.next() catch ".");
@@ -174,72 +182,69 @@ pub fn mainloop(self: *Self, config: Config) !void {
     stream.close();
 }
 
-fn addCommand(
-    self: *Self,
-    name: []const u8,
-    description: []const u8,
-    callback: CommandCallback,
-) !void {
-    try self.command_table.put(
-        name,
-        .{
-            .callback = callback,
-            .description = description,
-        },
-    );
-}
+var commands_list = [_]Command{
+    .{
+        .name = "put",
+        .description = "put <remote-path> <local-path> | upload file to server",
+        .callback = command_put,
+    },
+    .{
+        .name = "get",
+        .description = "get <remote-path> <local-path> | download file from server",
+        .callback = command_get,
+    },
+    .{
+        .name = "ls",
+        .description = "ls [dir] | shows entries in CWD or dir",
+        .callback = command_ls,
+    },
+    .{
+        .name = "quit",
+        .description = "close connection",
+        .callback = command_quit,
+    },
+    .{
+        .name = "ping",
+        .description = "check whether server is up or not",
+        .callback = command_ping,
+    },
+    .{
+        .name = "cat",
+        .description = "cat <file> | print file content to terminal",
+        .callback = command_cat,
+    },
+    .{
+        .name = "pwd",
+        .description = "show CWD",
+        .callback = command_pwd,
+    },
+    .{
+        .name = "cd",
+        .description = "cd <dir> | change CWD to dir",
+        .callback = command_cd,
+    },
+    .{
+        .name = "delete",
+        .description = "delete <file> | delete file",
+        .callback = command_delete,
+    },
+    .{
+        .name = "help",
+        .description = "print this help",
+        .callback = command_help,
+    },
+};
 
 fn installCommands(self: *Self) !void {
-    try self.addCommand(
-        "put",
-        "put <remote-path> <local-path> | upload file to server",
-        command_put,
+    std.mem.sort(
+        Command,
+        commands_list[0..],
+        {},
+        commandlessThan,
     );
-    try self.addCommand(
-        "get",
-        "get <remote-path> <local-path> | download file from server",
-        command_get,
-    );
-    try self.addCommand(
-        "ls",
-        "ls [dir] | shows entries in CWD or dir",
-        command_ls,
-    );
-    try self.addCommand(
-        "quit",
-        "close connection",
-        command_quit,
-    );
-    try self.addCommand(
-        "ping",
-        "check whether server is up or not",
-        command_ping,
-    );
-    try self.addCommand(
-        "cat",
-        "cat <file> | print file content to terminal",
-        command_cat,
-    );
-    try self.addCommand(
-        "pwd",
-        "show CWD",
-        command_pwd,
-    );
-    try self.addCommand(
-        "cd",
-        "cd <dir> | change CWD to dir",
-        command_cd,
-    );
-    try self.addCommand(
-        "delete",
-        "delete <file> | delete file",
-        command_delete,
-    );
-    try self.addCommand(
-        "help",
-        "print this help",
-        command_help,
-    );
+    for (commands_list) |cmd| {
+        try self.command_table.put(cmd.name, cmd);
+    }
 }
 
 pub fn init(config: Config) Self {

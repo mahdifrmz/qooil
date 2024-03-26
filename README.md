@@ -29,28 +29,20 @@ Examples:
 
 After connecting to the server, the client gives you a REPL to communicate to the server:
 
-change working directory:
 ```
-> cd dir
-```
+> help
 
-listing nodes in a directory:
-```
-> ls
-```
+cat                     cat <file> | print file content to terminal
+cd                      cd <dir> | change CWD to dir
+delete                  delete <file> | delete file
+get                     get <remote-path> <local-path> | download file from server
+help                    print this help
+ls                      ls [dir] | shows entries in CWD or dir
+ping                    check whether server is up or not
+put                     put <remote-path> <local-path> | upload file to server
+pwd                     show CWD
+quit                    close connection
 
-printing a file to terminal:
-```
-> cat file
-```
-downloading a file to local system:
-```
-> get remote-file local-address
-```
-
-exiting:
-```
-> quit
 ```
 
 ## Todo
