@@ -75,6 +75,17 @@ pub const Header = union(enum(TagType)) {
     /// nor the server.
     Corrupt: CorruptHeader = 18,
     Error: ErrorHeader = 19,
+    GetStat: PathHeader = 20,
+    Stat: StatHeader = 21,
+};
+pub const NodeType = enum(u8) {
+    File = 1,
+    Dir = 2,
+};
+pub const StatHeader = struct {
+    ty: NodeType,
+    /// MUST always be zero for directories
+    size: u64,
 };
 pub const EmptyHeader = packed struct {};
 pub const ReadHeader = packed struct {

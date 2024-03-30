@@ -318,21 +318,52 @@ test "read file" {
 
     var client = Client(ChannelStream).init();
     try client.connect(server.stream);
-    _ = client.getFile(
-        temp_dir,
-        buf_stream.writer(),
-    ) catch |err| {
-        switch (err) {
-            error.IsNotFile => {},
-            else => unreachable,
-        }
-    };
+    try std.testing.expectError(
+        error.IsNotFile,
+        client.getFile(
+            temp_dir,
+            buf_stream.writer(),
+        ),
+    );
     const size = try client.getFile(
         file_path,
         buf_stream.writer(),
     );
     try client.close();
     try std.testing.expectEqualSlices(u8, "some data", buf[0..size]);
+}
+
+test "stat file" {
+    const allocator = std.testing.allocator;
+    const temp_dir = try makeTestDir();
+    defer removeTestDir(temp_dir);
+    const file_name = "test-file";
+    const file_content: []const u8 = "some data";
+    const file_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ temp_dir, file_name });
+    defer allocator.free(file_path);
+    try makeTestFile(temp_dir, file_name, file_content);
+
+    var server = try ServerTester.init(Config.init(allocator));
+    defer server.deinit();
+
+    var client = Client(ChannelStream).init();
+    try client.connect(server.stream);
+    try std.testing.expectError(
+        error.NonExisting,
+        client.stat("213724#@#%&"),
+    );
+    switch (try client.stat(file_path)) {
+        .File => |hdr| try std.testing.expectEqual(
+            file_content.len,
+            hdr.size,
+        ),
+        else => unreachable,
+    }
+    switch (try client.stat(temp_dir)) {
+        .Dir => {},
+        else => unreachable,
+    }
+    try client.close();
 }
 
 test "write file" {

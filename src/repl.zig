@@ -97,6 +97,18 @@ fn command_get(self: *Self) !void {
     defer local_file.close();
     _ = try self.client.getFile(remote_path, local_file.writer());
 }
+fn command_stat(self: *Self) !void {
+    const remote_path = try self.next();
+    const stt = try self.client.stat(remote_path);
+    switch (stt) {
+        .File => |hdr| {
+            log.printFmt("type: file\nsize: {d}\n", .{hdr.size});
+        },
+        .Dir => {
+            log.printFmt("type: directory\n", .{});
+        },
+    }
+}
 fn command_put(self: *Self) !void {
     const remote_path = try self.next();
     const local_path = try self.next();
@@ -227,6 +239,11 @@ var commands_list = [_]Command{
         .name = "delete",
         .description = "delete <file> | delete file",
         .callback = command_delete,
+    },
+    .{
+        .name = "stat",
+        .description = "stat <file|dir> | get stat of inode",
+        .callback = command_stat,
     },
     .{
         .name = "help",

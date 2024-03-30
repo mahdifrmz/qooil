@@ -18,6 +18,11 @@ pub const Entry = struct {
     is_dir: bool,
 };
 
+pub const Stat = union(enum) {
+    File: struct { size: u64 },
+    Dir: struct {},
+};
+
 pub fn Client(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -205,6 +210,25 @@ pub fn Client(comptime T: type) type {
                 },
                 else => return error.Protocol,
             }
+        }
+        pub fn stat(self: *Self, path: []const u8) !Stat {
+            try self.checkConnected();
+            try self.send(
+                .{
+                    .GetStat = .{
+                        .length = @intCast(path.len),
+                    },
+                },
+            );
+            _ = try self.writeBuffer(path);
+            const resp = try self.recv();
+            return switch (resp) {
+                .Stat => |hdr| switch (hdr.ty) {
+                    .File => Stat{ .File = .{ .size = hdr.size } },
+                    .Dir => Stat{ .Dir = .{} },
+                },
+                else => return error.Protocol,
+            };
         }
         pub fn putFile(self: *Self, path: []const u8, reader: anytype, size: u64) !void {
             try self.checkConnected();

@@ -13,6 +13,8 @@ const ListHeader = protocol.ListHeader;
 const ReadHeader = protocol.ReadHeader;
 const WriteHeader = protocol.WriteHeader;
 const DeleteHeader = protocol.DeleteHeader;
+const PathHeader = protocol.PathHeader;
+const NodeType = protocol.NodeType;
 
 /// Created per client.
 /// File/stream agnostic.
@@ -248,6 +250,27 @@ pub fn ServerHandler(comptime T: type) type {
                 else => return ServerError.IsNotFile,
             }
         }
+        fn nodeStat(
+            self: *Self,
+            path: []const u8,
+            parent: ?*std.fs.Dir,
+        ) !std.fs.File.Stat {
+            const file_name = std.fs.path.basename(path);
+            if (file_name.len == 0)
+                return ServerError.InvalidFileName;
+            var dir = if (std.fs.path.dirname(path)) |dir_path|
+                try self.openDir(dir_path, null)
+            else
+                copyDir(self.cwd);
+            errdefer dir.close();
+            const stt = dir.statFile(file_name) catch return ServerError.NonExisting;
+            if (parent) |prnt| {
+                prnt.* = dir;
+            } else {
+                dir.close();
+            }
+            return stt;
+        }
         fn handleRead(self: *Self, hdr: ReadHeader) !void {
             var buf = [_]u8{0} ** @max(MAX_NAME, READ_BUFFER_SIZE);
             const path = try self.readPath(hdr.length, buf[0..]);
@@ -272,6 +295,24 @@ pub fn ServerHandler(comptime T: type) type {
                     break;
                 }
             }
+        }
+        fn handleGetStat(self: *Self, hdr: PathHeader) !void {
+            var buf = [_]u8{0} ** @max(MAX_NAME, READ_BUFFER_SIZE);
+            const path = try self.readPath(hdr.length, buf[0..]);
+            const stat = try self.nodeStat(
+                path,
+                null,
+            );
+            const stat_resp: Header = switch (stat.kind) {
+                .file => .{
+                    .Stat = .{ .ty = NodeType.File, .size = stat.size },
+                },
+                .directory => .{
+                    .Stat = .{ .ty = NodeType.Dir, .size = 0 },
+                },
+                else => return ServerError.NonExisting,
+            };
+            try self.send(stat_resp);
         }
         fn handleDelete(self: *Self, hdr: DeleteHeader) !void {
             var buf = [_]u8{0} ** @max(MAX_NAME, READ_BUFFER_SIZE);
@@ -323,6 +364,7 @@ pub fn ServerHandler(comptime T: type) type {
                 .Write => |hdr| try self.handleWrite(hdr),
                 .GetInfo => try self.handleGetInfo(),
                 .Delete => |hdr| try self.handleDelete(hdr),
+                .GetStat => |hdr| try self.handleGetStat(hdr),
                 .Corrupt => |hdr| {
                     self.error_arg1 = hdr.tag;
                     return ServerError.CorruptMessageTag;
