@@ -167,11 +167,15 @@ fn runloop(self: *Self) !void {
     try self.exec();
 }
 
-pub fn mainloop(self: *Self, config: Config) !void {
-    self.client = Client(net.Stream).init();
-    try self.installCommands();
+fn connect(self: *Self, config: Config) !void {
     const stream = try net.tcpConnectToHost(config.allocator, config.address, config.port);
+    self.client = Client(net.Stream).init();
     try self.client.connect(stream);
+}
+
+pub fn mainloop(self: *Self, config: Config) !void {
+    try self.installCommands();
+    try self.connect(config);
     while (!self.is_exiting) {
         self.runloop() catch |err| {
             const error_text = switch (err) {
@@ -184,6 +188,19 @@ pub fn mainloop(self: *Self, config: Config) !void {
                 error.CantOpen,
                 error.InvalidFileName,
                 => @errorName(err),
+                error.EndOfStream,
+                error.connectionResetByPeer,
+                => {
+                    while (true) {
+                        self.connect(config) catch {
+                            log.println("trying to reconnect...");
+                            std.time.sleep(3 * 1000 * 1000 * 1000);
+                            continue;
+                        };
+                        break;
+                    }
+                    continue;
+                },
                 else => return err,
             };
             log.printFmt("Error: {s}\n", .{error_text});
@@ -191,7 +208,6 @@ pub fn mainloop(self: *Self, config: Config) !void {
         };
     }
     try self.client.close();
-    stream.close();
 }
 
 var commands_list = [_]Command{
