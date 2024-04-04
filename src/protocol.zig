@@ -202,25 +202,13 @@ fn headerToLittle(hdr: anytype) void {
 }
 
 fn writeHeader(header: Header, strm: anytype) !void {
-    var header_mut = header;
-    const fields = @typeInfo(Header).Union.fields;
-    const options = @typeInfo(@typeInfo(Header).Union.tag_type orelse unreachable).Enum.fields;
-    const idx = @intFromEnum(header_mut);
-
-    inline for (fields) |f| {
-        inline for (options) |o| {
-            if (std.mem.eql(u8, o.name, f.name)) {
-                if (o.value == idx) {
-                    var data = &@field(header_mut, f.name);
-                    headerToLittle(data);
-                    try strm.writeAll(std.mem.asBytes(data));
-                    return;
-                }
-            }
+    switch (header) {
+        inline else => |hdr| {
+            var hdr_mut = hdr;
+            headerToLittle(&hdr_mut);
+            try strm.writeAll(std.mem.asBytes(&hdr_mut));        
         }
     }
-
-    unreachable;
 }
 
 fn readHeader(idx: TagType, strm: anytype) !Header {
